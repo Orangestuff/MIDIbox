@@ -29,10 +29,10 @@ A fully customizable, battery-powered MIDI foot controller built on the ESP32-S3
 | **Microcontroller** | 1 | ESP32-S3 DevKit (or similar S3 board) |
 | **PSU/Battery Charger** | 1 | TP4056 Charger Module (or similar) |
 | **Footswitches** | 8 | Momentary SPST Footswitches |
-| **Power Switch** | 1 | Any SPST switch |
+| **Power Switch** | 1 | Any SPST toggle switch |
 | **LEDs** | 8 | WS2812B (Neopixel) individual LEDs or strip segments |
 | **Expression Jack** | 1 | Servo extension wire |
-| **Battery** | 1 | 3.7V LiPo Battery (ensure capacity fits your needs) |
+| **Battery** | 1 | 3.7V 18650 Battery |
 | **Resistors** | 2 | 100kΩ (For Battery Voltage Divider) |
 | **Diodes** | 8 | 1N4148 (For Switch Matrix - Optional but recommended) |
 | **Enclosure** | 1 | 3D Printed Case (Files included in `/stl` folder) |
@@ -49,7 +49,16 @@ The project uses a **2x4 Switch Matrix** to save pins.
 * **Expression Pedal (ADC):** GPIO 3
 
 > **Note:** The LEDs require a "Snake" wiring pattern for the code's default mapping:
-> `Bat_LED -> Sw1 -> Sw2 -> Sw3 -> Sw4 -> Sw8 -> Sw7 -> Sw6 -> Sw5`
+> `Sw1 -> Sw2 -> Sw3 -> Sw4 -> Sw8 -> Sw7 -> Sw6 -> Sw5`
+
+## ⚡ Optional Hardware Mod: Offline Charging
+
+By default, the ESP32 draws power and boots up whenever a USB cable is connected, even if the intention is only to charge the battery.
+
+To enable **Offline Charging** (charging the battery via USB while the main unit remains powered down), you can remove the VBUS blocking diode (typically labeled **D1** or similar on the PCB).
+
+* **Action:** Desolder and remove the Schottky diode on the 5V rail.
+* **Result:** The USB connection will power the battery management circuit exclusively. The ESP32 will not boot until the main power switch is toggled ON.
 
 ## 🖨️ 3D Printed Case
 
