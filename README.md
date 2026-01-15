@@ -31,7 +31,7 @@ A fully customizable, battery-powered MIDI foot controller built on the ESP32-S3
 | **Footswitches** | 8 | Momentary SPST Footswitches |
 | **Power Switch** | 1 | Any SPST switch |
 | **LEDs** | 8 | WS2812B (Neopixel) individual LEDs or strip segments |
-| **Expression Jack** | 1 | 1/4" TRS Stereo Jack (Switched) |
+| **Expression Jack** | 1 | Servo extension wire |
 | **Battery** | 1 | 3.7V LiPo Battery (ensure capacity fits your needs) |
 | **Resistors** | 2 | 100kΩ (For Battery Voltage Divider) |
 | **Diodes** | 8 | 1N4148 (For Switch Matrix - Optional but recommended) |
