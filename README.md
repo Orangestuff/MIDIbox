@@ -27,7 +27,9 @@ A fully customizable, battery-powered MIDI foot controller built on the ESP32-S3
 | Component | Quantity | Description |
 | --- | --- | --- |
 | **Microcontroller** | 1 | ESP32-S3 DevKit (or similar S3 board) |
+| **PSU/Battery Charger** | 1 | TP4056 Charger Module (or similar) |
 | **Footswitches** | 8 | Momentary SPST Footswitches |
+| **Power Switch** | 1 | Any SPST switch |
 | **LEDs** | 8 | WS2812B (Neopixel) individual LEDs or strip segments |
 | **Expression Jack** | 1 | 1/4" TRS Stereo Jack (Switched) |
 | **Battery** | 1 | 3.7V LiPo Battery (ensure capacity fits your needs) |
@@ -36,7 +38,6 @@ A fully customizable, battery-powered MIDI foot controller built on the ESP32-S3
 | **Enclosure** | 1 | 3D Printed Case (Files included in `/stl` folder) |
 
 ## 🔌 Wiring
-
 The project uses a **2x4 Switch Matrix** to save pins.
 
 **Pin Definitions (Default in `main.c`):**
