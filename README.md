@@ -57,8 +57,6 @@ This repository includes STL files for a custom enclosure designed to fit the el
 * **Top Shell:** Holds the 8 switches and LEDs.
 * **Bottom Plate:** Mounts the ESP32 and battery.
 
-*(Upload your STL files to a folder named `stl` in your repo).*
-
 ## 🚀 Installation & Setup
 
 This project is built using the **ESP-IDF** framework.
