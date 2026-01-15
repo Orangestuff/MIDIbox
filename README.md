@@ -1,83 +1,119 @@
-| Supported Targets | ESP32-P4 | ESP32-S2 | ESP32-S3 |
-| ----------------- | -------- | -------- | -------- |
+# ESP32-S3 Wireless MIDI Foot Controller
 
-# TinyUSB MIDI Device Example
+A fully customizable, battery-powered MIDI foot controller built on the ESP32-S3. It features 8 footswitches, an expression pedal input, RGB LED status indicators, and a modern Web Interface for configuration—no recompiling required to change banks or messages!
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+## 🌟 Features
 
-This example shows how to set up ESP chip to work as a USB MIDI Device.
-It outputs a MIDI note sequence via the native USB port.
+* **Dual Connectivity:** Works simultaneously as a **Bluetooth LE MIDI** device and a **USB MIDI** device.
+* **Web Configuration Portal:** Host-based configuration page (access via browser) to map switches, calibrate the expression pedal, and manage WiFi settings.
+* **4 Programmable Banks:** Cycle through 4 distinct banks, each with its own color coding.
+* **Smart LED Feedback:**
+* **Per-Switch LEDs:** Show bank color when active/toggled.
+* **Battery Monitor:** Onboard LED changes color (Green/Orange/Red) based on voltage.
+* **Visual Feedback:** Flashes white on press, blue/white on mode changes.
 
-As a USB stack, a TinyUSB component is used.
 
-## How to use example
+* **Advanced Switch Modes:**
+* **Momentary & Toggle:** Configurable per switch.
+* **Exclusive Groups:** "Radio button" style logic (only one switch in a group can be active at a time).
+* **Bank Cycling:** Assign dedicated switches to cycle banks forward or reverse.
 
-### Hardware Required
 
-Any ESP board that have USB-OTG supported.
+* **Expression Pedal:** Integrated smoothing and hysteresis filtering with easy min/max calibration via the Web UI.
+* **Deep Sleep Ready:** Optimized for battery operation.
 
-#### Pin Assignment
+## 🛠️ Hardware Bill of Materials (BOM)
 
-_Note:_ In case your board doesn't have micro-USB connector connected to USB-OTG peripheral, you may have to DIY a cable and connect **D+** and **D-** to the pins listed below.
+| Component | Quantity | Description |
+| --- | --- | --- |
+| **Microcontroller** | 1 | ESP32-S3 DevKit (or similar S3 board) |
+| **Footswitches** | 8 | Momentary SPST Footswitches |
+| **LEDs** | 8 | WS2812B (Neopixel) individual LEDs or strip segments |
+| **Expression Jack** | 1 | 1/4" TRS Stereo Jack (Switched) |
+| **Battery** | 1 | 3.7V LiPo Battery (ensure capacity fits your needs) |
+| **Resistors** | 2 | 100kΩ (For Battery Voltage Divider) |
+| **Diodes** | 8 | 1N4148 (For Switch Matrix - Optional but recommended) |
+| **Enclosure** | 1 | 3D Printed Case (Files included in `/stl` folder) |
 
-See common pin assignments for USB Device examples from [upper level](../../README.md#common-pin-assignments).
+## 🔌 Wiring
 
-### Build and Flash
+The project uses a **2x4 Switch Matrix** to save pins.
 
-Build the project and flash it to the board, then run monitor tool to view serial output:
+**Pin Definitions (Default in `main.c`):**
 
+* **Matrix Rows:** GPIO 12, 13
+* **Matrix Columns:** GPIO 4, 5, 6, 8
+* **LED Data:** GPIO 48
+* **Battery Sense (ADC):** GPIO 7 (via Voltage Divider)
+* **Expression Pedal (ADC):** GPIO 3
+
+> **Note:** The LEDs require a "Snake" wiring pattern for the code's default mapping:
+> `Bat_LED -> Sw1 -> Sw2 -> Sw3 -> Sw4 -> Sw8 -> Sw7 -> Sw6 -> Sw5`
+
+## 🖨️ 3D Printed Case
+
+This repository includes STL files for a custom enclosure designed to fit the electronics and switches perfectly.
+
+* **Top Shell:** Holds the 8 switches and LEDs.
+* **Bottom Plate:** Mounts the ESP32 and battery.
+
+*(Upload your STL files to a folder named `stl` in your repo).*
+
+## 🚀 Installation & Setup
+
+This project is built using the **ESP-IDF** framework.
+
+1. **Clone the Repository:**
 ```bash
-idf.py -p PORT flash monitor
-```
-
-(Replace PORT with the name of the serial port to use.)
-
-(To exit the serial monitor, type ``Ctrl-]``.)
-
-See the Getting Started Guide for full steps to configure and use ESP-IDF to build projects.
-
-## MIDI output
-
-You can use several programs on your computer to listen to the ESP's MIDI output depending on your operating system, e.g.:
-
-* Windows: `MIDI-OX`
-* Linux: `qsynth` with `qjackctl`
-* macOS: `SimpleSynth`
-
-## Example Output
-
-After the flashing you should see the output at idf monitor:
+git clone https://github.com/yourusername/esp32-midi-pedal.git
 
 ```
-I (285) example: USB initialization
-I (285) tusb_desc:
-┌─────────────────────────────────┐
-│  USB Device Descriptor Summary  │
-├───────────────────┬─────────────┤
-│bDeviceClass       │ 0           │
-├───────────────────┼─────────────┤
-│bDeviceSubClass    │ 0           │
-├───────────────────┼─────────────┤
-│bDeviceProtocol    │ 0           │
-├───────────────────┼─────────────┤
-│bMaxPacketSize0    │ 64          │
-├───────────────────┼─────────────┤
-│idVendor           │ 0x303a      │
-├───────────────────┼─────────────┤
-│idProduct          │ 0x4008      │
-├───────────────────┼─────────────┤
-│bcdDevice          │ 0x100       │
-├───────────────────┼─────────────┤
-│iManufacturer      │ 0x1         │
-├───────────────────┼─────────────┤
-│iProduct           │ 0x2         │
-├───────────────────┼─────────────┤
-│iSerialNumber      │ 0x3         │
-├───────────────────┼─────────────┤
-│bNumConfigurations │ 0x1         │
-└───────────────────┴─────────────┘
-I (455) TinyUSB: TinyUSB Driver installed
-I (465) example: USB initialization DONE
+
+
+2. **Build and Flash:**
+```bash
+idf.py set-target esp32s3
+idf.py build
+idf.py flash monitor
+
 ```
 
-Disconnect UART-to-USB port and connect the native USB port to a computer then the device should show up as a USB MIDI Device while outputting notes.
+
+
+## ⚙️ Configuration (Web UI)
+
+You do not need to edit code to change MIDI messages!
+
+1. **Enter Config Mode:**
+* If no WiFi is configured, the pedal creates an Access Point named **`MidiPedal_Config`**.
+* Connect to this network (No Password).
+
+
+2. **Open the Interface:**
+* Navigate to `http://192.168.4.1` in your web browser.
+
+
+3. **Customize:**
+* **Switches:** Set Type (PC, CC, Note), Channel, and Value.
+* **Modes:** Enable Toggle, Momentary, or assign Exclusive Groups.
+* **Pedal:** Calibrate Heel/Toe positions visually.
+* **WiFi:** Connect to your home router to access config without disconnecting your internet.
+
+
+
+## 🎮 Usage
+
+* **Wireless Toggle:** Hold **Switch 5 + Switch 8** for 2 seconds to toggle between BLE MIDI (Blue Flash) and WiFi Config Mode (White Flash).
+* **Bank Cycle:** Assign "Bank Cycle Fwd" or "Rev" to any switch in the Web UI to navigate banks.
+* **Battery Check:** The onboard LED (Index 0) indicates health:
+* 🟢 **Green:** > 3.9V
+* 🟠 **Orange:** > 3.6V
+* 🔴 **Red:** < 3.6V (Charge Soon)
+
+
+
+## 📄 License
+
+This project is open source. Feel free to modify and build your own!
+
+---
