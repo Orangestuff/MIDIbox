@@ -3,7 +3,6 @@
 A fully customizable, battery-powered MIDI foot controller built on the ESP32-S3. It features 8 footswitches, an expression pedal input, RGB LED status indicators, and a modern Web Interface for configuration—no recompiling required to change banks or messages!
 
 ## 🌟 Features
-
 * **Dual Connectivity:** Works simultaneously as a **Bluetooth LE MIDI** device and a **USB MIDI** device.
 * **Web Configuration Portal:** Host-based configuration page (access via browser) to map switches, calibrate the expression pedal, and manage WiFi settings.
 * **4 Programmable Banks:** Cycle through 4 distinct banks, each with its own color coding.
@@ -57,8 +56,6 @@ This repository includes STL files for a custom enclosure designed to fit the el
 * **Top Shell:** Holds the 8 switches and LEDs.
 * **Bottom Plate:** Mounts the ESP32 and battery.
 
-*(Upload your STL files to a folder named `stl` in your repo).*
-
 ## 🚀 Installation & Setup
 
 This project is built using the **ESP-IDF** framework.
@@ -85,7 +82,7 @@ idf.py flash monitor
 You do not need to edit code to change MIDI messages!
 
 1. **Enter Config Mode:**
-* If no WiFi is configured, the pedal creates an Access Point named **`MidiPedal_Config`**.
+* Enable wifi. If no WiFi is configured, the pedal creates an Access Point named **`MidiPedal_Config`**.
 * Connect to this network (No Password).
 
 
