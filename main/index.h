@@ -114,7 +114,6 @@ const char* INDEX_HTML = R"=====(
     <button class='btn-main' onclick='save()'>Save All Configuration</button>
 
 <script>
-    // ADDED NEW TYPES: 250 (Bank Rev), 251 (Bank Fwd)
     const types = { 144: 'Note On', 128: 'Note Off', 176: 'CC', 192: 'PC', 250: 'Bank Cycle Rev', 251: 'Bank Cycle Fwd' };
     const bankColors = ['#FF0000', '#00FF00', '#0055FF', '#FF00FF'];
     const textColors = ['#FFFFFF', '#000000', '#FFFFFF', '#FFFFFF'];
@@ -125,6 +124,27 @@ const char* INDEX_HTML = R"=====(
 
     function genTypes(sel) {
         return Object.keys(types).map(k => `<option value='${k}' ${sel == k ? 'selected' : ''}>${types[k]}</option>`).join('');
+    }
+
+    // --- BITMASK HELPERS ---
+    // Converts Integer (5) to String ("1, 3")
+    function fromMask(mask) {
+        let grps = [];
+        for(let i=0; i<8; i++) {
+            if((mask >> i) & 1) grps.push(i+1);
+        }
+        return grps.join(', ');
+    }
+    
+    // Converts String ("1, 3") to Integer (5)
+    function toMask(str) {
+        let mask = 0;
+        if(!str) return 0;
+        str.toString().split(',').forEach(s => {
+            let v = parseInt(s.trim());
+            if(!isNaN(v) && v >= 1 && v <= 8) mask |= (1 << (v-1));
+        });
+        return mask;
     }
 
     async function load() {
@@ -215,7 +235,7 @@ const char* INDEX_HTML = R"=====(
         let v = parseInt(val);
         if (valIdx === 1) v = v - 1; 
         fullData.banks[curBank].switches[swIdx][cat][valIdx] = v;
-        if(cat === 'p' && valIdx === 0) render(); // Re-render on Type change to update Disabled state
+        if(cat === 'p' && valIdx === 0) render(); 
     }
     
     window.updBool = function(swIdx, key, checked) {
@@ -224,9 +244,14 @@ const char* INDEX_HTML = R"=====(
         render(); 
     }
     
+    // Updated updVal to handle text mask input
     window.updVal = function(swIdx, key, val) {
         if(!fullData) return;
-        fullData.banks[curBank].switches[swIdx][key] = parseInt(val);
+        if(key === 'excl' || key === 'incl') {
+            fullData.banks[curBank].switches[swIdx][key] = toMask(val);
+        } else {
+            fullData.banks[curBank].switches[swIdx][key] = parseInt(val);
+        }
     }
 
     function render() {
@@ -234,27 +259,35 @@ const char* INDEX_HTML = R"=====(
         const bank = fullData.banks[curBank];
         let html = '';
         bank.switches.forEach((s, i) => {
-            // Check if Primary Type is BANK CYCLE (250 or 251)
             const isBank = (s.p[0] == 250 || s.p[0] == 251);
-            
-            // If Bank switch, disable everything else
             const disableClass = isBank ? "disabled" : "";
             const lpClass = (s.lp_en && !isBank) ? "" : "disabled";
 
             const togEnabled = (s.tog !== undefined) ? s.tog : false; 
-            const grpVal = (s.grp !== undefined) ? s.grp : 0; 
             
+            // Convert Integer Masks to Strings for UI
+            const exclText = (s.excl !== undefined) ? fromMask(s.excl) : ""; 
+            const inclText = (s.incl !== undefined) ? fromMask(s.incl) : ""; 
+
             html += `
             <div class='sw'>
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:10px;">
                     <h3 style="margin:0; border:none;">SWITCH ${i+1}</h3>
-                    <div style="display:flex; align-items:center; gap:10px; ${isBank ? 'opacity:0.3; pointer-events:none;' : ''}">
-                        <div style="display:flex; align-items:center; gap:3px;">
-                            <label style="margin:0; font-size:0.7em;">GROUP</label>
-                            <input type="number" style="width:40px; padding:2px;" min="0" max="8" value="${grpVal}" onchange="updVal(${i}, 'grp', this.value)">
+                    
+                    <div style="display:flex; align-items:center; gap:5px; ${isBank ? 'opacity:0.3; pointer-events:none;' : ''}">
+                        
+                        <div style="display:flex; flex-direction:column; align-items:center;">
+                            <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#e74c3c;">EXCL</label>
+                            <input type="text" placeholder="1,2" style="width:60px; padding:2px; text-align:center; border:1px solid #e74c3c; background:#2d2d2d; color:#fff;" value="${exclText}" onchange="updVal(${i}, 'excl', this.value)">
                         </div>
-                        <div style="display:flex; align-items:center; gap:5px;">
-                            <label style="margin:0; font-size:0.7em;">TOGGLE</label>
+
+                        <div style="display:flex; flex-direction:column; align-items:center;">
+                            <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#2ecc71;">INCL</label>
+                            <input type="text" placeholder="3,4" style="width:60px; padding:2px; text-align:center; border:1px solid #2ecc71; background:#2d2d2d; color:#fff;" value="${inclText}" onchange="updVal(${i}, 'incl', this.value)">
+                        </div>
+
+                        <div style="display:flex; flex-direction:column; align-items:center; margin-left:5px;">
+                            <label style="margin:0; font-size:0.6em; margin-bottom:2px;">TOGGLE</label>
                             <input type="checkbox" ${togEnabled ? "checked" : ""} onchange="updBool(${i}, 'tog', this.checked)">
                         </div>
                     </div>
