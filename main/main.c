@@ -109,10 +109,11 @@ typedef struct {
     uint8_t l_type; uint8_t l_chan; uint8_t l_d1; 
     uint8_t lp_enabled; 
     uint8_t toggle_mode; 
-    uint8_t group;
-    uint8_t excl_mask; // NEW: Exclusive Group ID (0 = None)
-    uint8_t incl_mask; // NEW: Inclusive Group ID (0 = None
-    uint8_t incl_is_master;
+    
+    // --- GROUPING VARIABLES ---
+    uint8_t excl_mask;        // Groups 1-8 I belong to (Exclusive/XOR)
+    uint8_t incl_mask;        // Groups 1-8 I belong to (Inclusive/Scene)
+    uint8_t incl_master_mask; // Groups 1-8 I AM THE LEADER OF
 } sw_cfg_t;
 
 typedef struct { sw_cfg_t switches[SWITCH_COUNT]; } bank_t;
@@ -664,7 +665,7 @@ esp_err_t get_json(httpd_req_t *req) {
             cJSON_AddBoolToObject(item, "tog", (sw->toggle_mode == 1)); 
             cJSON_AddNumberToObject(item, "excl", sw->excl_mask);
             cJSON_AddNumberToObject(item, "incl", sw->incl_mask);
-            cJSON_AddBoolToObject(item, "im", (sw->incl_is_master == 1));
+            cJSON_AddNumberToObject(item, "im", sw->incl_master_mask);
             
             cJSON_AddItemToArray(sw_arr, item);
         } cJSON_AddItemToObject(bank_obj, "switches", sw_arr); cJSON_AddItemToArray(banks_arr, bank_obj);
@@ -811,7 +812,7 @@ esp_err_t post_save(httpd_req_t *req) {
                         if(tog) { s->toggle_mode = cJSON_IsTrue(tog) ? 1 : 0; } 
                         if(excl) { s->excl_mask = excl->valueint; }
                         if(incl) { s->incl_mask = incl->valueint; }
-                        if(im) { s->incl_is_master = cJSON_IsTrue(im) ? 1 : 0; }
+                        if(im) { s->incl_master_mask = im->valueint; }
                     }
                 }
             }
@@ -1062,7 +1063,7 @@ while(1) {
                         is_cycling = true;
                     }
 
-// B. Standard MIDI / Toggle Logic (GLOBAL BANK + MOMENTARY MASTER)
+// B. Standard MIDI / Toggle Logic (GLOBAL BANK + MOMENTARY MASTER + GRANULAR MASKS)
                 if (!is_cycling) { 
                     
                     // --- CASE 1: TOGGLE MODE ---
@@ -1078,7 +1079,6 @@ while(1) {
 
                         // ---------------------------------------------------------
                         // GLOBAL INTERACTION SCANNER (TOGGLE)
-                        // Iterate through ALL banks (0-3) and ALL switches (0-7)
                         // ---------------------------------------------------------
                         
                         // 3. PASS 1: EXCLUSIVE GROUPS (Only runs if I turned ON)
@@ -1086,14 +1086,10 @@ while(1) {
                             for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
                                 for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
                                     
-                                    // Skip Self
                                     if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-
                                     sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
 
-                                    // Check Bitmask Intersection
                                     if ((other_cfg->excl_mask & cfg->excl_mask) != 0) {
-                                        // If it's ON, Kill it.
                                         if (sw_toggled_on[b_scan][s_scan]) {
                                             send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
                                             sw_toggled_on[b_scan][s_scan] = false;
@@ -1103,20 +1099,18 @@ while(1) {
                             }
                         }
 
-                        // 4. PASS 2: INCLUSIVE GROUPS (MASTER/SLAVE LOGIC)
-                        if (cfg->incl_mask > 0) {
-                            // Rule 1: Sync only if turning ON
-                            // Rule 2: Sync only if MASTER
-                            if (new_state == true && cfg->incl_is_master == 1) { 
+                        // 4. PASS 2: INCLUSIVE GROUPS (GRANULAR MASTER LOGIC)
+                        // Use incl_master_mask to see exactly WHICH groups I lead
+                        if (cfg->incl_master_mask > 0) {
+                            if (new_state == true) { 
                                 for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
                                     for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
                                         
                                         if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-                                        
                                         sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
 
-                                        if ((other_cfg->incl_mask & cfg->incl_mask) != 0) {
-                                            // If neighbor is OFF, turn it ON.
+                                        // CHECK: Does their Membership intersect with my Leadership?
+                                        if ((other_cfg->incl_mask & cfg->incl_master_mask) != 0) {
                                             if (sw_toggled_on[b_scan][s_scan] == false) {
                                                 send_midi_msg(other_cfg->p_type, other_cfg->p_chan, other_cfg->p_d1, 127);
                                                 sw_toggled_on[b_scan][s_scan] = true;
@@ -1135,7 +1129,6 @@ while(1) {
                         
                         // ---------------------------------------------------------
                         // GLOBAL INTERACTION SCANNER (MOMENTARY)
-                        // Treat a momentary press as a "Turn ON" event for groups
                         // ---------------------------------------------------------
 
                         // 2. PASS 1: EXCLUSIVE GROUPS
@@ -1147,7 +1140,6 @@ while(1) {
                                     sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
 
                                     if ((other_cfg->excl_mask & cfg->excl_mask) != 0) {
-                                        // Kill conflicting toggles
                                         if (sw_toggled_on[b_scan][s_scan]) {
                                             send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
                                             sw_toggled_on[b_scan][s_scan] = false;
@@ -1157,16 +1149,17 @@ while(1) {
                             }
                         }
 
-                        // 3. PASS 2: INCLUSIVE GROUPS (Check Master)
-                        if (cfg->incl_mask > 0 && cfg->incl_is_master == 1) { 
+                        // 3. PASS 2: INCLUSIVE GROUPS (GRANULAR MASTER LOGIC)
+                        // Updated to use incl_master_mask here as well
+                        if (cfg->incl_master_mask > 0) { 
                             for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
                                 for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
                                     
                                     if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
                                     sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
 
-                                    if ((other_cfg->incl_mask & cfg->incl_mask) != 0) {
-                                        // Activate Slaves
+                                    // CHECK: Does their Membership intersect with my Leadership?
+                                    if ((other_cfg->incl_mask & cfg->incl_master_mask) != 0) {
                                         if (sw_toggled_on[b_scan][s_scan] == false) {
                                             send_midi_msg(other_cfg->p_type, other_cfg->p_chan, other_cfg->p_d1, 127);
                                             sw_toggled_on[b_scan][s_scan] = true;
