@@ -20,6 +20,7 @@
 #include "esp_system.h"
 #include "esp_random.h"
 #include "esp_mac.h"
+#include "esp_timer.h"
 
 // --- ADC Headers ---
 #include "esp_adc/adc_oneshot.h"
@@ -126,7 +127,7 @@ wifi_cfg_t w_cfg;
 volatile device_cfg_t dev_cfg; 
 static QueueHandle_t save_queue = NULL;
 static EventGroupHandle_t s_wifi_event_group;
-static uint32_t flash_timer = 0;
+//static uint32_t flash_timer = 0;
 static httpd_handle_t srv = NULL;
 static bool is_wifi_on = false;
 
@@ -344,6 +345,14 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
     else if (event == ESP_GATTS_CONNECT_EVT) {
         current_conn_id = param->connect.conn_id;
         is_ble_connected = true;
+                esp_ble_conn_update_params_t conn_params = {0};
+        memcpy(conn_params.bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
+        conn_params.min_int = 0x06; // 7.5ms (1.25ms units)
+        conn_params.max_int = 0x0C; // 15ms
+        conn_params.latency = 0;
+        conn_params.timeout = 400;  // 4s
+        // Note: The central (phone/PC) decides if it accepts this, but we MUST ask.
+        esp_ble_gap_update_conn_params(&conn_params);
         ESP_LOGI(TAG, "BLE Connected");
     }
     else if (event == ESP_GATTS_DISCONNECT_EVT) {
@@ -921,105 +930,134 @@ void app_main(void) {
     // NEW: Track which switch caused the flash
     int flash_source_sw_idx = -1;
 void midi_task(void *pv) {
-    rmt_config_t config = RMT_DEFAULT_CONFIG_TX(LED_DATA_PIN, RMT_CHANNEL_0); config.clk_div = 4; rmt_config(&config); rmt_driver_install(config.channel, 0, 0);
+    // --- SETUP RMT (LEDs) ---
+    rmt_config_t config = RMT_DEFAULT_CONFIG_TX(LED_DATA_PIN, RMT_CHANNEL_0); 
+    config.clk_div = 4; 
+    rmt_config(&config); 
+    rmt_driver_install(config.channel, 0, 0);
     
+    // --- LOCAL STATE VARIABLES ---
     bool button_state[SWITCH_COUNT]; 
     bool last_button_state[SWITCH_COUNT]; 
     uint32_t press_start[SWITCH_COUNT]; 
     bool lp_triggered[SWITCH_COUNT]; 
     uint32_t last_debounce_time[SWITCH_COUNT];
     
-    // 2D Array to track toggles
+    // Toggle state tracking
     bool sw_toggled_on[BANK_COUNT][SWITCH_COUNT];
     
-    // Initialize
+    // Initialize Arrays
     for(int b=0; b<BANK_COUNT; b++) {
         for(int i=0; i<SWITCH_COUNT; i++) { 
-            button_state[i] = false; last_button_state[i] = false; press_start[i]=0; lp_triggered[i]=false; last_debounce_time[i]=0; 
+            button_state[i] = false; 
+            last_button_state[i] = false; 
+            press_start[i] = 0; 
+            lp_triggered[i] = false; 
+            last_debounce_time[i] = 0; 
             sw_toggled_on[b][i] = false; 
         }
     }
     
+    // Timers & Triggers
     uint32_t combo_timer = 0;
     bool combo_triggered = false;
-    uint32_t battery_timer = 0; 
+    uint32_t last_slow_task_time = 0; // For throttling ADC/LEDs
+    
+    // LED Flash Logic
+    uint32_t flash_end_time = 0;      // When the flash should stop
     int flash_source_sw_idx = -1; 
 
     while(1) {
-        uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
-        process_expression_pedal();
+        // --- HIGH PRECISION TIME ---
+        // We use esp_timer for accurate ms tracking regardless of tick rate
+        int64_t now_us = esp_timer_get_time();
+        uint32_t now_ms = (uint32_t)(now_us / 1000);
 
-        if ((now - battery_timer) > 100) { battery_timer = now; read_battery(); }
+        // ============================================================
+        //  FAST LOOP (Executes every ~1ms)
+        //  Tasks: Matrix Scan, Debounce, MIDI Logic, Switch State
+        // ============================================================
 
-        // --- SCAN MATRIX ---
+        // 1. SCAN MATRIX
         for (int r = 0; r < NUM_ROWS; r++) {
-            gpio_set_level(ROW_PINS[r], 0); esp_rom_delay_us(10); 
+            gpio_set_level(ROW_PINS[r], 0); 
+            esp_rom_delay_us(10); // Short settle time for signal stability
             for (int c = 0; c < NUM_COLS; c++) {
                 int sw_idx = MATRIX_MAP[r][c];
+                
+                // Active Low Logic (0 = Pressed)
                 bool pressed = (gpio_get_level(COL_PINS[c]) == 0);
+                
+                // Debounce
                 if (pressed != button_state[sw_idx]) {
-                    if ((now - last_debounce_time[sw_idx]) > 20) {
+                    if ((now_ms - last_debounce_time[sw_idx]) > 20) { // 20ms Debounce
                         button_state[sw_idx] = pressed;
-                        last_debounce_time[sw_idx] = now;
+                        last_debounce_time[sw_idx] = now_ms;
                     }
                 }
             }
             gpio_set_level(ROW_PINS[r], 1); 
         }
 
-        // Combo Check (Btn 5 + 8)
+        // 2. COMBO CHECK (Btn 5 + Btn 8)
+        // Btn 5 is Index 4, Btn 8 is Index 7
         if (button_state[4] && button_state[7]) {
-            if (combo_timer == 0) combo_timer = now;
-            if (now - combo_timer > COMBO_HOLD_MS && !combo_triggered) {
+            if (combo_timer == 0) combo_timer = now_ms;
+            
+            if (now_ms - combo_timer > COMBO_HOLD_MS && !combo_triggered) {
                 combo_triggered = true;
                 bool new_wifi_mode = !is_wifi_on;
                 set_wifi_mode(new_wifi_mode);
+                
+                // Visual Confirmation (Quick Flash)
                 uint8_t r = new_wifi_mode ? dev_cfg.global_brightness : 0;
                 uint8_t g = new_wifi_mode ? dev_cfg.global_brightness : 0;
                 uint8_t b = dev_cfg.global_brightness;
 
-                for(int k=0; k<5; k++) { 
-                    for(int j=0; j<LED_COUNT; j++) set_pixel(j, r, g, b);
-                    refresh_leds();
-                    vTaskDelay(pdMS_TO_TICKS(100)); 
-                    for(int j=0; j<LED_COUNT; j++) set_pixel(j, 0, 0, 0);
-                    refresh_leds();
-                    vTaskDelay(pdMS_TO_TICKS(100)); 
-                }
+                for(int j=0; j<LED_COUNT; j++) set_pixel(j, r, g, b);
+                refresh_leds();
+                // We use vTaskDelay here because this is a rare "Mode Change" event
+                vTaskDelay(pdMS_TO_TICKS(500)); 
             }
         } else {
-            combo_timer = 0; combo_triggered = false;
+            combo_timer = 0; 
+            combo_triggered = false;
         }
 
+        // 3. SWITCH LOGIC PROCESSOR
         for(int i=0; i<SWITCH_COUNT; i++) {
             bool s = button_state[i];
-            bool old_logic_s = !s; 
-            bool old_logic_last = !last_button_state[i]; 
+            bool last_s = last_button_state[i];
 
-            if (old_logic_s != old_logic_last) { 
+            // Detect Edge (Press or Release)
+            if (s != last_s) { 
                 sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[dev_cfg.current_bank].switches[i];
                 
-                // === PRESSED ===
-                if (old_logic_s == 0) { 
-                    flash_timer = now + 50;
+                // === PRESS EVENT ===
+                if (s == true) { 
+                    // Set Flash Trigger
+                    flash_end_time = now_ms + 50; // Flash for 50ms
                     flash_source_sw_idx = i;
+
                     bool is_cycling = false;
                     
-                    // --- NEW CYCLE LOGIC (Check Config Type) ---
-                    // 250 = Bank Rev, 251 = Bank Fwd
+                    // A. Check for Bank Cycle Types (250/251)
                     if (cfg->p_type == 250) { 
                         dev_cfg.current_bank = (dev_cfg.current_bank - 1 + BANK_COUNT) % BANK_COUNT; 
-                        uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0); is_cycling = true; 
+                        uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0); 
+                        is_cycling = true; 
                     } 
                     else if (cfg->p_type == 251) { 
                         dev_cfg.current_bank = (dev_cfg.current_bank + 1) % BANK_COUNT; 
-                        uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0); is_cycling = true;
+                        uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0); 
+                        is_cycling = true;
                     }
 
+                    // B. Standard MIDI / Toggle Logic
                     if (!is_cycling) { 
                         if (cfg->toggle_mode) {
                             if (!sw_toggled_on[dev_cfg.current_bank][i]) {
-                                // EXCLUSIVE GROUP LOGIC
+                                // Group Exclusion Logic
                                 if (cfg->group > 0) {
                                     for (int other = 0; other < SWITCH_COUNT; other++) {
                                         if (other == i) continue; 
@@ -1030,21 +1068,25 @@ void midi_task(void *pv) {
                                         }
                                     }
                                 }
+                                // Turn ON
                                 send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
                                 sw_toggled_on[dev_cfg.current_bank][i] = true;
                             } else {
+                                // Turn OFF
                                 send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0);
                                 sw_toggled_on[dev_cfg.current_bank][i] = false;
                             }
                         } else {
+                            // Momentary Press
                             send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
                         }
                     }
-                    press_start[i] = now; 
+                    press_start[i] = now_ms; 
                     lp_triggered[i] = false; 
 
-                } else { // === RELEASED ===
-                    // Don't send release if it's a cycle switch
+                } else { 
+                // === RELEASE EVENT ===
+                    // Send note off only if NOT toggling and NOT a bank cycle
                     if(!lp_triggered[i] && cfg->p_type != 250 && cfg->p_type != 251) { 
                         if (!cfg->toggle_mode) { 
                             send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0); 
@@ -1054,41 +1096,59 @@ void midi_task(void *pv) {
                 last_button_state[i] = s; 
             }
             
-            // Long Press
-            if(button_state[i] && !lp_triggered[i] && (now - press_start[i] > LONG_PRESS_MS)) {
+            // === LONG PRESS CHECK ===
+            if(button_state[i] && !lp_triggered[i] && (now_ms - press_start[i] > LONG_PRESS_MS)) {
                 sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[dev_cfg.current_bank].switches[i];
                 // Disable LP if Cycle Switch
                 if(cfg->lp_enabled == 1 && cfg->p_type != 250 && cfg->p_type != 251) { 
                     lp_triggered[i] = true; 
                     send_midi_msg(cfg->lp_type, cfg->lp_chan, cfg->lp_d1, 127); 
-                    flash_timer = now + 50;
+                    
+                    flash_end_time = now_ms + 50; 
                     flash_source_sw_idx = i; 
                 }
             }
         }
 
-        // --- FLASH & LED UPDATE ---
-        if (xTaskGetTickCount() * portTICK_PERIOD_MS < flash_timer) {
-            uint8_t fw = dev_cfg.global_brightness / 3; 
-            uint8_t br = BANK_COLORS[dev_cfg.current_bank][0] * dev_cfg.global_brightness / 255;
-            uint8_t bg = BANK_COLORS[dev_cfg.current_bank][1] * dev_cfg.global_brightness / 255;
-            uint8_t bb = BANK_COLORS[dev_cfg.current_bank][2] * dev_cfg.global_brightness / 255;
+        // ============================================================
+        //  SLOW LOOP (Executes every ~10ms)
+        //  Tasks: ADC Reading, LED Refresh, Housekeeping
+        // ============================================================
+        if (now_ms - last_slow_task_time > 10) {
+            last_slow_task_time = now_ms;
 
-            for(int k=0; k<LED_COUNT; k++) {
-                bool is_source = false;
-                if (flash_source_sw_idx != -1) {
-                    int target_led = (flash_source_sw_idx < 4) ? flash_source_sw_idx + 1 : 12 - flash_source_sw_idx;
-                    if (k == target_led) is_source = true;
+            // 1. Process Analog Inputs (Heavy tasks)
+            process_expression_pedal();
+            read_battery();
+
+            // 2. LED Animation Handler
+            if (now_ms < flash_end_time) {
+                // --- FLASH STATE ---
+                uint8_t fw = dev_cfg.global_brightness / 3; 
+                uint8_t br = BANK_COLORS[dev_cfg.current_bank][0] * dev_cfg.global_brightness / 255;
+                uint8_t bg = BANK_COLORS[dev_cfg.current_bank][1] * dev_cfg.global_brightness / 255;
+                uint8_t bb = BANK_COLORS[dev_cfg.current_bank][2] * dev_cfg.global_brightness / 255;
+
+                for(int k=0; k<LED_COUNT; k++) {
+                    bool is_source = false;
+                    // Map physical switch to LED index (Snake/Circular logic)
+                    if (flash_source_sw_idx != -1) {
+                        int target_led = (flash_source_sw_idx < 4) ? flash_source_sw_idx + 1 : 12 - flash_source_sw_idx;
+                        if (k == target_led) is_source = true;
+                    }
+                    if (is_source) set_pixel(k, br, bg, bb); 
+                    else set_pixel(k, fw, fw, fw); 
                 }
-                if (is_source) set_pixel(k, br, bg, bb); 
-                else set_pixel(k, fw, fw, fw); 
+                refresh_leds();
+            } 
+            else {
+                // --- STANDARD STATE ---
+                flash_source_sw_idx = -1; 
+                update_status_leds(g_bat_voltage, dev_cfg.current_bank, sw_toggled_on[dev_cfg.current_bank], button_state);
             }
-            refresh_leds();
-        } 
-        else {
-            flash_source_sw_idx = -1; 
-            update_status_leds(g_bat_voltage, dev_cfg.current_bank, sw_toggled_on[dev_cfg.current_bank], button_state);
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+
+        // Yield to Watchdog/Other Tasks for 1 tick (approx 1ms if CONFIG_FREERTOS_HZ=1000)
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
