@@ -1122,8 +1122,15 @@ while(1) {
                         }
                     } 
                     
-                    // --- CASE 2: MOMENTARY MODE ---
+// --- CASE 2: MOMENTARY MODE ---
                     else {
+                        // FIX: Force Toggle State to FALSE
+                        // This ensures that if the switch was previously Toggled ON, 
+                        // it clears immediately upon the next press.
+                        if (sw_toggled_on[dev_cfg.current_bank][i]) {
+                             sw_toggled_on[dev_cfg.current_bank][i] = false;
+                        }
+
                         // 1. Momentary Press (Always Send ON)
                         send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
                         
@@ -1150,7 +1157,6 @@ while(1) {
                         }
 
                         // 3. PASS 2: INCLUSIVE GROUPS (GRANULAR MASTER LOGIC)
-                        // Updated to use incl_master_mask here as well
                         if (cfg->incl_master_mask > 0) { 
                             for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
                                 for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
@@ -1173,12 +1179,44 @@ while(1) {
                     press_start[i] = now_ms; 
                     lp_triggered[i] = false; 
 
-                } else { 
+} else { 
                 // === RELEASE EVENT ===
                     // Send note off only if NOT toggling and NOT a bank cycle
                     if(!lp_triggered[i] && cfg->p_type != 250 && cfg->p_type != 251) { 
+                        
+                        // Handle Momentary Release
                         if (!cfg->toggle_mode) { 
+                            // 1. Send MASTER Note Off
                             send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0); 
+
+                            // 2. RELEASE SLAVES (Sync Release)
+                            // If I am a Master, I need to check if my Slaves are Momentary.
+                            // If they are, I must manually turn them OFF now.
+                            if (cfg->incl_master_mask > 0) {
+                                for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
+                                    for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
+                                        
+                                        if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
+                                        sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
+
+                                        // DO WE LEAD THIS SLAVE?
+                                        if ((other_cfg->incl_mask & cfg->incl_master_mask) != 0) {
+                                            
+                                            // IS THE SLAVE ALSO MOMENTARY?
+                                            // If the slave is Toggle mode, we usually leave it ON (Latch behavior).
+                                            // But if it's Momentary, it must mirror our foot press.
+                                            if (!other_cfg->toggle_mode) {
+                                                
+                                                // Send Slave Note Off
+                                                send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
+                                                
+                                                // Force LED OFF
+                                                sw_toggled_on[b_scan][s_scan] = false;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
