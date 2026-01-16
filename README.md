@@ -1,9 +1,3 @@
-Here is the updated `README.md`. I have revised the **Features** and **Configuration** sections to highlight the sophisticated "Scene" logic, Master/Slave architecture, and Global Bank interaction we just implemented.
-
-I also added a new section called **"Advanced Grouping Logic"** because your grouping system is now powerful enough to warrant its own explanation!
-
----
-
 # ESP32-S3 High-Performance Wireless MIDI Foot Controller
 
 A professional-grade, fully customizable MIDI foot controller built on the ESP32-S3. Designed for low latency and high flexibility, it features 8 footswitches, an expression pedal input, global scene management, and a modern Web Interface for on-the-fly configuration—no recompiling required!
