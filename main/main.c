@@ -458,17 +458,18 @@ void wifi_init_task(void *pv) {
         ESP_LOGE(TAG, "WiFi Failed -> Starting Access Point");
         esp_wifi_stop();
         vTaskDelay(pdMS_TO_TICKS(100));
-        wifi_config_t ap_cfg = {
-            .ap = {
-                .ssid = "MidiPedal_Config",
-                .ssid_len = strlen("MidiPedal_Config"),
-                .channel = 1,               
-                .password = "",
-                .max_connection = 4,
-                .authmode = WIFI_AUTH_OPEN,
-                .pmf_cfg = { .required = false, .capable = false }
-            }
-        };
+        wifi_config_t ap_cfg = {0};
+        memset(&ap_cfg, 0, sizeof(wifi_config_t));
+
+        // 2. Set Robust Parameters (WPA2 + Channel 6)
+        strlcpy((char*)ap_cfg.ap.ssid, "MidiPedal_Config", sizeof(ap_cfg.ap.ssid));
+        strlcpy((char*)ap_cfg.ap.password, "12345678", sizeof(ap_cfg.ap.password)); // Simple password
+        ap_cfg.ap.channel = 6;                       // Channel 6 is often clearer than 1
+        ap_cfg.ap.ssid_len = strlen("MidiPedal_Config");
+        ap_cfg.ap.max_connection = 4;
+        ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;     // Phones prefer WPA2 over Open
+        ap_cfg.ap.pmf_cfg.required = false;          // Keep PMF off for compatibility
+
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP)); 
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg)); 
         
@@ -921,7 +922,7 @@ void app_main(void) {
 
     if (is_wifi_on) { xTaskCreatePinnedToCore(wifi_init_task, "wifi_init", 4096, NULL, 10, NULL, 1); } else { init_ble_midi(); }
 
-    xTaskCreate(midi_task, "midi", 4096, NULL, 10, NULL);
+    xTaskCreatePinnedToCore(midi_task, "midi", 4096, NULL, 5, NULL, 0);
 }
 // ... other variables ...
     uint32_t last_debounce_time[SWITCH_COUNT];
@@ -1149,6 +1150,8 @@ void midi_task(void *pv) {
         }
 
         // Yield to Watchdog/Other Tasks for 1 tick (approx 1ms if CONFIG_FREERTOS_HZ=1000)
-        vTaskDelay(pdMS_TO_TICKS(1));
+        // Force at least 1 tick delay (prevents WDT crash on 100Hz systems)
+        const TickType_t delay = pdMS_TO_TICKS(1);
+        vTaskDelay(delay == 0 ? 1 : delay);
     }
 }
