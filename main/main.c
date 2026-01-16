@@ -539,19 +539,22 @@ void set_pixel(int index, uint8_t r, uint8_t g, uint8_t b) {
 // Add this static buffer just above the function to remember the last state
 static uint8_t last_led_state[LED_COUNT][3];
 
+// Add this static spinlock at the top of your file (with other globals)
+static portMUX_TYPE rmt_lock = portMUX_INITIALIZER_UNLOCKED;
+
+// Remove the static spinlock (no longer needed)
+// static portMUX_TYPE rmt_lock = portMUX_INITIALIZER_UNLOCKED; <--- DELETE THIS
+
 void refresh_leds() {
     // --- 1. SMART CHECK ---
-    // Compare the current buffer (led_strip_pixels) with the last known state
-    // If they are identical, EXIT immediately. Do not send data.
     if (memcmp(led_strip_pixels, last_led_state, sizeof(led_strip_pixels)) == 0) {
         return; 
     }
 
     // --- 2. UPDATE HISTORY ---
-    // They are different, so save the new state for next time
     memcpy(last_led_state, led_strip_pixels, sizeof(led_strip_pixels));
 
-    // --- 3. SEND DATA (Existing Logic) ---
+    // --- 3. PREPARE DATA ---
     rmt_item32_t items[LED_COUNT * 24];
     
     for (int n = 0; n < LED_COUNT; n++) {
@@ -559,17 +562,29 @@ void refresh_leds() {
         uint8_t g = led_strip_pixels[n][1];
         uint8_t b = led_strip_pixels[n][2];
         
+        // GRB Order
         uint32_t color = (g << 16) | (r << 8) | b; 
         
         for (int i = 0; i < 24; i++) {
             bool bit = (color >> (23 - i)) & 1;
-            items[(n * 24) + i] = bit ? (rmt_item32_t){{{ 16, 1, 9, 0 }}} : (rmt_item32_t){{{ 8, 1, 17, 0 }}};
+            items[(n * 24) + i] = bit ? 
+                (rmt_item32_t){{{ 16, 1, 9, 0 }}} : 
+                (rmt_item32_t){{{ 8, 1, 17, 0 }}};
         }
     }
     
+    // --- 4. SEND DATA (SAFE MODE) ---
+    
+    // A. Force a clean Reset Line (Low) to clear any garbage on the wire
+    // We do this by temporarily disabling the RMT TX loop output if needed, 
+    // but a simple delay is usually enough if the line is idle.
+    esp_rom_delay_us(60); 
+    
+    // B. Send the data
+    // We do NOT use taskENTER_CRITICAL here because rmt_write_items needs the OS.
+    // Instead, we trust the RMT hardware buffer. 
+    // The "Disco Glitch" usually happens because of "Ghost" writes or too frequent updates.
     rmt_write_items(RMT_CHANNEL_0, items, LED_COUNT * 24, true);
-    rmt_item32_t reset_part = {{{ 2000, 0, 2000, 0 }}}; 
-    rmt_write_items(RMT_CHANNEL_0, &reset_part, 1, true);
 }
 
 void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *btn_held) {
