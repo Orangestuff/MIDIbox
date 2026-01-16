@@ -991,7 +991,7 @@ void midi_task(void *pv) {
                 
                 // Debounce
                 if (pressed != button_state[sw_idx]) {
-                    if ((now_ms - last_debounce_time[sw_idx]) > 20) { // 20ms Debounce
+                    if ((now_ms - last_debounce_time[sw_idx]) > 50) { // 20ms Debounce
                         button_state[sw_idx] = pressed;
                         last_debounce_time[sw_idx] = now_ms;
                     }
