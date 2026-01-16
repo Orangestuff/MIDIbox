@@ -254,7 +254,7 @@ const char* INDEX_HTML = R"=====(
         }
     }
 
-    function render() {
+function render() {
         if(!fullData) return;
         const bank = fullData.banks[curBank];
         let html = '';
@@ -265,9 +265,11 @@ const char* INDEX_HTML = R"=====(
 
             const togEnabled = (s.tog !== undefined) ? s.tog : false; 
             
-            // Convert Integer Masks to Strings for UI
             const exclText = (s.excl !== undefined) ? fromMask(s.excl) : ""; 
             const inclText = (s.incl !== undefined) ? fromMask(s.incl) : ""; 
+            
+            // NEW: Master Flag
+            const isMaster = (s.im !== undefined) ? s.im : false;
 
             html += `
             <div class='sw'>
@@ -278,12 +280,18 @@ const char* INDEX_HTML = R"=====(
                         
                         <div style="display:flex; flex-direction:column; align-items:center;">
                             <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#e74c3c;">EXCL</label>
-                            <input type="text" placeholder="1,2" style="width:60px; padding:2px; text-align:center; border:1px solid #e74c3c; background:#2d2d2d; color:#fff;" value="${exclText}" onchange="updVal(${i}, 'excl', this.value)">
+                            <input type="text" placeholder="1,2" style="width:50px; padding:2px; text-align:center; border:1px solid #e74c3c; background:#2d2d2d; color:#fff;" value="${exclText}" onchange="updVal(${i}, 'excl', this.value)">
                         </div>
 
                         <div style="display:flex; flex-direction:column; align-items:center;">
                             <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#2ecc71;">INCL</label>
-                            <input type="text" placeholder="3,4" style="width:60px; padding:2px; text-align:center; border:1px solid #2ecc71; background:#2d2d2d; color:#fff;" value="${inclText}" onchange="updVal(${i}, 'incl', this.value)">
+                            <div style="display:flex; gap:2px;">
+                                <input type="text" placeholder="3,4" style="width:50px; padding:2px; text-align:center; border:1px solid #2ecc71; background:#2d2d2d; color:#fff;" value="${inclText}" onchange="updVal(${i}, 'incl', this.value)">
+                                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; background:#222; border:1px solid #2ecc71; padding:0 2px;">
+                                    <label style="font-size:0.5em; margin:0; cursor:pointer; color:#2ecc71;">M</label>
+                                    <input type="checkbox" style="width:12px; height:12px; margin:0;" ${isMaster ? "checked" : ""} onchange="updBool(${i}, 'im', this.checked)" title="Master Switch">
+                                </div>
+                            </div>
                         </div>
 
                         <div style="display:flex; flex-direction:column; align-items:center; margin-left:5px;">
