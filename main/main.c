@@ -112,6 +112,7 @@ typedef struct {
     uint8_t group;
     uint8_t excl_mask; // NEW: Exclusive Group ID (0 = None)
     uint8_t incl_mask; // NEW: Inclusive Group ID (0 = None
+    uint8_t incl_is_master;
 } sw_cfg_t;
 
 typedef struct { sw_cfg_t switches[SWITCH_COUNT]; } bank_t;
@@ -663,6 +664,7 @@ esp_err_t get_json(httpd_req_t *req) {
             cJSON_AddBoolToObject(item, "tog", (sw->toggle_mode == 1)); 
             cJSON_AddNumberToObject(item, "excl", sw->excl_mask);
             cJSON_AddNumberToObject(item, "incl", sw->incl_mask);
+            cJSON_AddBoolToObject(item, "im", (sw->incl_is_master == 1));
             
             cJSON_AddItemToArray(sw_arr, item);
         } cJSON_AddItemToObject(bank_obj, "switches", sw_arr); cJSON_AddItemToArray(banks_arr, bank_obj);
@@ -800,6 +802,7 @@ esp_err_t post_save(httpd_req_t *req) {
                         cJSON *tog = cJSON_GetObjectItem(it, "tog"); 
                         cJSON *excl = cJSON_GetObjectItem(it, "excl");
                         cJSON *incl = cJSON_GetObjectItem(it, "incl");
+                        cJSON *im = cJSON_GetObjectItem(it, "im");
                         
                         if(p) { s->p_type=cJSON_GetArrayItem(p,0)->valueint; s->p_chan=cJSON_GetArrayItem(p,1)->valueint; s->p_d1=cJSON_GetArrayItem(p,2)->valueint; }
                         if(lp) { s->lp_type=cJSON_GetArrayItem(lp,0)->valueint; s->lp_chan=cJSON_GetArrayItem(lp,1)->valueint; s->lp_d1=cJSON_GetArrayItem(lp,2)->valueint; }
@@ -808,6 +811,7 @@ esp_err_t post_save(httpd_req_t *req) {
                         if(tog) { s->toggle_mode = cJSON_IsTrue(tog) ? 1 : 0; } 
                         if(excl) { s->excl_mask = excl->valueint; }
                         if(incl) { s->incl_mask = incl->valueint; }
+                        if(im) { s->incl_is_master = cJSON_IsTrue(im) ? 1 : 0; }
                     }
                 }
             }
@@ -1058,76 +1062,121 @@ while(1) {
                         is_cycling = true;
                     }
 
-                // B. Standard MIDI / Toggle Logic (GLOBAL BANK INTERACTION)
-                    if (!is_cycling) { 
-                        if (cfg->toggle_mode) {
-                            // 1. Flip State Immediately
-                            bool new_state = !sw_toggled_on[dev_cfg.current_bank][i];
-                            
-                            // 2. Send MIDI & Update Self
-                            if (new_state) send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
-                            else           send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0);
-                            
-                            sw_toggled_on[dev_cfg.current_bank][i] = new_state;
+// B. Standard MIDI / Toggle Logic (GLOBAL BANK + MOMENTARY MASTER)
+                if (!is_cycling) { 
+                    
+                    // --- CASE 1: TOGGLE MODE ---
+                    if (cfg->toggle_mode) {
+                        // 1. Flip State Immediately
+                        bool new_state = !sw_toggled_on[dev_cfg.current_bank][i];
+                        
+                        // 2. Send MIDI & Update Self
+                        if (new_state) send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
+                        else           send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0);
+                        
+                        sw_toggled_on[dev_cfg.current_bank][i] = new_state;
 
-                            // ---------------------------------------------------------
-                            // GLOBAL INTERACTION SCANNER
-                            // Iterate through ALL banks (0-3) and ALL switches (0-7)
-                            // ---------------------------------------------------------
-                            
-                            // 3. PASS 1: EXCLUSIVE GROUPS (Only runs if I turned ON)
-                            if (new_state == true && cfg->excl_mask > 0) {
+                        // ---------------------------------------------------------
+                        // GLOBAL INTERACTION SCANNER (TOGGLE)
+                        // Iterate through ALL banks (0-3) and ALL switches (0-7)
+                        // ---------------------------------------------------------
+                        
+                        // 3. PASS 1: EXCLUSIVE GROUPS (Only runs if I turned ON)
+                        if (new_state == true && cfg->excl_mask > 0) {
+                            for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
+                                for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
+                                    
+                                    // Skip Self
+                                    if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
+
+                                    sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
+
+                                    // Check Bitmask Intersection
+                                    if ((other_cfg->excl_mask & cfg->excl_mask) != 0) {
+                                        // If it's ON, Kill it.
+                                        if (sw_toggled_on[b_scan][s_scan]) {
+                                            send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
+                                            sw_toggled_on[b_scan][s_scan] = false;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4. PASS 2: INCLUSIVE GROUPS (MASTER/SLAVE LOGIC)
+                        if (cfg->incl_mask > 0) {
+                            // Rule 1: Sync only if turning ON
+                            // Rule 2: Sync only if MASTER
+                            if (new_state == true && cfg->incl_is_master == 1) { 
                                 for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
                                     for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
                                         
-                                        // Skip Self (Must match both Bank AND Switch Index)
                                         if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-
+                                        
                                         sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
 
-                                        // Check Bitmask Intersection
-                                        if ((other_cfg->excl_mask & cfg->excl_mask) != 0) {
-                                            // If it's ON, Kill it.
-                                            // Note: We access the global state [b_scan][s_scan]
-                                            if (sw_toggled_on[b_scan][s_scan]) {
-                                                send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
-                                                sw_toggled_on[b_scan][s_scan] = false;
+                                        if ((other_cfg->incl_mask & cfg->incl_mask) != 0) {
+                                            // If neighbor is OFF, turn it ON.
+                                            if (sw_toggled_on[b_scan][s_scan] == false) {
+                                                send_midi_msg(other_cfg->p_type, other_cfg->p_chan, other_cfg->p_d1, 127);
+                                                sw_toggled_on[b_scan][s_scan] = true;
                                             }
                                         }
                                     }
                                 }
                             }
+                        }
+                    } 
+                    
+                    // --- CASE 2: MOMENTARY MODE ---
+                    else {
+                        // 1. Momentary Press (Always Send ON)
+                        send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
+                        
+                        // ---------------------------------------------------------
+                        // GLOBAL INTERACTION SCANNER (MOMENTARY)
+                        // Treat a momentary press as a "Turn ON" event for groups
+                        // ---------------------------------------------------------
 
-                            // 4. PASS 2: INCLUSIVE GROUPS (Uni-directional: Sync ON only)
-                            if (cfg->incl_mask > 0) {
-                                if (new_state == true) { 
-                                    for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
-                                        for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
-                                            
-                                            // Skip Self
-                                            if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-                                            
-                                            sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
+                        // 2. PASS 1: EXCLUSIVE GROUPS
+                        if (cfg->excl_mask > 0) {
+                            for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
+                                for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
+                                    
+                                    if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
+                                    sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
 
-                                            // Check Bitmask Intersection
-                                            if ((other_cfg->incl_mask & cfg->incl_mask) != 0) {
-                                                // If it's OFF, turn it ON.
-                                                if (sw_toggled_on[b_scan][s_scan] == false) {
-                                                    send_midi_msg(other_cfg->p_type, other_cfg->p_chan, other_cfg->p_d1, 127);
-                                                    sw_toggled_on[b_scan][s_scan] = true;
-                                                }
-                                            }
+                                    if ((other_cfg->excl_mask & cfg->excl_mask) != 0) {
+                                        // Kill conflicting toggles
+                                        if (sw_toggled_on[b_scan][s_scan]) {
+                                            send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
+                                            sw_toggled_on[b_scan][s_scan] = false;
                                         }
                                     }
                                 }
                             }
-                            // ---------------------------------------------------------
+                        }
 
-                        } else {
-                            // Momentary Press
-                            send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
+                        // 3. PASS 2: INCLUSIVE GROUPS (Check Master)
+                        if (cfg->incl_mask > 0 && cfg->incl_is_master == 1) { 
+                            for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
+                                for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
+                                    
+                                    if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
+                                    sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
+
+                                    if ((other_cfg->incl_mask & cfg->incl_mask) != 0) {
+                                        // Activate Slaves
+                                        if (sw_toggled_on[b_scan][s_scan] == false) {
+                                            send_midi_msg(other_cfg->p_type, other_cfg->p_chan, other_cfg->p_d1, 127);
+                                            sw_toggled_on[b_scan][s_scan] = true;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
+                }
                     press_start[i] = now_ms; 
                     lp_triggered[i] = false; 
 
