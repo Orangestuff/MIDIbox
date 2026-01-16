@@ -33,9 +33,10 @@ A fully customizable, battery-powered MIDI foot controller built on the ESP32-S3
 | **LEDs** | 8 | WS2812B (Neopixel) individual LEDs or strip segments |
 | **Expression Jack** | 1 | Servo extension wire |
 | **Battery** | 1 | 3.7V 18650 Battery |
-| **Resistors** | 2 | 100kΩ (For Battery Voltage Divider) |
+| **Resistors** | 3 | 2x100kΩ (For Battery Voltage Divider) 1x10kΩ (For Expression Pedal Pulldown) |
 | **Diodes** | 8 | 1N4148 (For Switch Matrix - Optional but recommended) |
 | **Enclosure** | 1 | 3D Printed Case (Files included in `/stl` folder) |
+| **Threaded Inserts** | 6 | M3x4x5 Threaded Inserts (For pedalCaseV2.STL) |
 
 ## 🔌 Wiring
 The project uses a **2x4 Switch Matrix** to save pins.
@@ -64,8 +65,8 @@ To enable **Offline Charging** (charging the battery via USB while the main unit
 
 This repository includes STL files for a custom enclosure designed to fit the electronics and switches perfectly.
 
-* **Top Shell:** Holds the 8 switches and LEDs.
-* **Bottom Plate:** Mounts the ESP32 and battery.
+* **pedalCaseV2.STL:** Holds all electronics.
+* **baseplateV2.STL:** mount with M3 screws and heated inserts.
 
 ## 🚀 Installation & Setup
 
