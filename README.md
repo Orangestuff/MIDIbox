@@ -94,7 +94,7 @@ You do not need to edit code to change MIDI messages!
 
 1. **Enter Config Mode:**
 * If no WiFi is configured, the pedal creates an Access Point named **`MidiPedal_Config`**.
-* Connect to this network (No Password).
+* Connect to this network with password "12345678".
 
 
 2. **Open the Interface:**
