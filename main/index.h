@@ -123,9 +123,8 @@ const char* INDEX_HTML = R"=====(
     let liveExpVal = 0; 
 
 // Helper to generate the dropdown options
-    function genTypes(val) {
-        // 0=None, 144=NoteOn, 128=NoteOff, 176=CC, 192=PC
-        // 251=Next, 250=Prev, 252=B1, 253=B2, 254=B3, 255=B4
+// 1. GENERATOR FOR SHORT PRESS (Includes Banks)
+    function genMainTypes(val) {
         const opts = [
             {v:0, t:"None"},
             {v:144, t:"Note On"},
@@ -138,6 +137,22 @@ const char* INDEX_HTML = R"=====(
             {v:253, t:"Bank 2"},
             {v:254, t:"Bank 3"},
             {v:255, t:"Bank 4"}
+        ];
+        let h = "";
+        opts.forEach(o => {
+            h += `<option value='${o.v}' ${val==o.v?"selected":""}>${o.t}</option>`;
+        });
+        return h;
+    }
+
+    // 2. GENERATOR FOR LP/RELEASE (No Banks)
+    function genSecTypes(val) {
+        const opts = [
+            {v:0, t:"None"},
+            {v:144, t:"Note On"},
+            {v:128, t:"Note Off"},
+            {v:176, t:"CC"},
+            {v:192, t:"PC"}
         ];
         let h = "";
         opts.forEach(o => {
@@ -278,17 +293,22 @@ function render() {
         if(!fullData) return;
         const bank = fullData.banks[curBank];
         let html = '';
+        
         bank.switches.forEach((s, i) => {
-            const isBank = (s.p[0] == 250 || s.p[0] == 251);
-            const disableClass = isBank ? "disabled" : "";
-            const lpClass = (s.lp_en && !isBank) ? "" : "disabled";
-
-            const togEnabled = (s.tog !== undefined) ? s.tog : false; 
             
+            // CHECK: Is this a Bank Navigation Switch? (Type >= 250)
+            const isBank = (s.p[0] >= 250);
+            
+            // If yes, we disable EVERYTHING else
+            const bankDisable = isBank ? "disabled style='opacity:0.5; pointer-events:none;'" : "";
+            
+            // Long Press Logic (Standard disable if feature off)
+            const lpClass = (s.lp_en && !isBank) ? "" : "disabled style='opacity:0.5;'";
+
+            // Unpack Values
+            const togEnabled = (s.tog !== undefined) ? s.tog : false; 
             const exclText = (s.excl !== undefined) ? fromMask(s.excl) : ""; 
             const inclText = (s.incl !== undefined) ? fromMask(s.incl) : ""; 
-            
-            // NEW: Master Mask Text
             const masterText = (s.im !== undefined) ? fromMask(s.im) : "";
 
             html += `
@@ -296,26 +316,26 @@ function render() {
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:10px;">
                     <h3 style="margin:0; border:none;">SWITCH ${i+1}</h3>
                     
-                    <div style="display:flex; align-items:center; gap:5px; ${isBank ? 'opacity:0.3; pointer-events:none;' : ''}">
+                    <div style="display:flex; align-items:center; gap:5px; transition:opacity 0.2s;" ${isBank ? "style='opacity:0.3; pointer-events:none;'" : ""}>
                         
                         <div style="display:flex; flex-direction:column; align-items:center;">
                             <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#e74c3c;">EXCL</label>
-                            <input type="text" placeholder="1,2" style="width:50px; padding:2px; text-align:center; border:1px solid #e74c3c; background:#2d2d2d; color:#fff;" value="${exclText}" onchange="updVal(${i}, 'excl', this.value)">
+                            <input type="text" placeholder="1,2" style="width:50px; padding:2px; text-align:center; border:1px solid #e74c3c; background:#2d2d2d; color:#fff;" value="${exclText}" onchange="updVal(${i}, 'excl', this.value)" ${bankDisable}>
                         </div>
 
                         <div style="display:flex; flex-direction:column; align-items:center;">
                             <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#2ecc71;">INCL</label>
-                            <input type="text" placeholder="3,4" style="width:50px; padding:2px; text-align:center; border:1px solid #2ecc71; background:#2d2d2d; color:#fff;" value="${inclText}" onchange="updVal(${i}, 'incl', this.value)">
+                            <input type="text" placeholder="3,4" style="width:50px; padding:2px; text-align:center; border:1px solid #2ecc71; background:#2d2d2d; color:#fff;" value="${inclText}" onchange="updVal(${i}, 'incl', this.value)" ${bankDisable}>
                         </div>
                         
                         <div style="display:flex; flex-direction:column; align-items:center;">
                             <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#f1c40f;">LEAD</label>
-                            <input type="text" placeholder="3" style="width:50px; padding:2px; text-align:center; border:1px solid #f1c40f; background:#2d2d2d; color:#fff;" value="${masterText}" onchange="updVal(${i}, 'im', this.value)" title="Which groups I activate">
+                            <input type="text" placeholder="3" style="width:50px; padding:2px; text-align:center; border:1px solid #f1c40f; background:#2d2d2d; color:#fff;" value="${masterText}" onchange="updVal(${i}, 'im', this.value)" ${bankDisable}>
                         </div>
 
                         <div style="display:flex; flex-direction:column; align-items:center; margin-left:5px;">
                             <label style="margin:0; font-size:0.6em; margin-bottom:2px;">TOGGLE</label>
-                            <input type="checkbox" ${togEnabled ? "checked" : ""} onchange="updBool(${i}, 'tog', this.checked)">
+                            <input type="checkbox" ${togEnabled ? "checked" : ""} onchange="updBool(${i}, 'tog', this.checked)" ${bankDisable}>
                         </div>
                     </div>
                 </div>
@@ -323,26 +343,27 @@ function render() {
                 <div class='grid-section'>
                     <label>Short Press / Function</label>
                     <div class='input-group'>
-                        <select onchange="upd(${i},'p',0,this.value)">${genTypes(s.p[0])}</select>
-                        <input class="${disableClass}" type='number' value='${s.p[1] + 1}' onchange="upd(${i},'p',1,this.value)" min='1' max='16' title="Channel">
-                        <input class="${disableClass}" type='number' value='${s.p[2]}' onchange="upd(${i},'p',2,this.value)" min='0' max='127' title="Value">
+                        <select onchange="upd(${i},'p',0,this.value)">${genMainTypes(s.p[0])}</select>
+                        
+                        <input ${bankDisable} type='number' value='${s.p[1] + 1}' onchange="upd(${i},'p',1,this.value)" min='1' max='16' title="Channel">
+                        <input ${bankDisable} type='number' value='${s.p[2]}' onchange="upd(${i},'p',2,this.value)" min='0' max='127' title="Value">
                     </div>
                     
-                    <div class="label-row ${disableClass}">
+                    <div class="label-row" ${bankDisable}>
                         <label>Long Press (Momentary Only)</label>
-                        <input type="checkbox" style="width:auto;" ${s.lp_en ? "checked" : ""} onchange="updBool(${i}, 'lp_en', this.checked)">
+                        <input type="checkbox" style="width:auto;" ${s.lp_en ? "checked" : ""} onchange="updBool(${i}, 'lp_en', this.checked)" ${bankDisable}>
                     </div>
-                    <div class='input-group ${lpClass}'>
-                        <select onchange="upd(${i},'lp',0,this.value)">${genTypes(s.lp[0])}</select>
-                        <input type='number' value='${s.lp[1] + 1}' onchange="upd(${i},'lp',1,this.value)" min='1' max='16' title="Channel">
-                        <input type='number' value='${s.lp[2]}' onchange="upd(${i},'lp',2,this.value)" min='0' max='127' title="Value">
+                    <div class='input-group' ${lpClass} ${bankDisable}>
+                        <select onchange="upd(${i},'lp',0,this.value)">${genSecTypes(s.lp[0])}</select>
+                        <input type='number' value='${s.lp[1] + 1}' onchange="upd(${i},'lp',1,this.value)" min='1' max='16'>
+                        <input type='number' value='${s.lp[2]}' onchange="upd(${i},'lp',2,this.value)" min='0' max='127'>
                     </div>
 
-                    <label class="${disableClass}">Release / Toggle OFF</label>
-                    <div class='input-group ${disableClass}'>
-                        <select onchange="upd(${i},'l',0,this.value)">${genTypes(s.l[0])}</select>
-                        <input type='number' value='${s.l[1] + 1}' onchange="upd(${i},'l',1,this.value)" min='1' max='16' title="Channel">
-                        <input type='number' value='${s.l[2]}' onchange="upd(${i},'l',2,this.value)" min='0' max='127' title="Value">
+                    <label ${bankDisable}>Release / Toggle OFF</label>
+                    <div class='input-group' ${bankDisable}>
+                        <select onchange="upd(${i},'l',0,this.value)">${genSecTypes(s.l[0])}</select>
+                        <input type='number' value='${s.l[1] + 1}' onchange="upd(${i},'l',1,this.value)" min='1' max='16'>
+                        <input type='number' value='${s.l[2]}' onchange="upd(${i},'l',2,this.value)" min='0' max='127'>
                     </div>
                 </div>
             </div>`;
