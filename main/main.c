@@ -1066,42 +1066,69 @@ void app_main(void) {
     // NEW: Track which switch caused the flash
     int flash_source_sw_idx = -1;
 
-    // --- RECURSIVE TRIGGER FUNCTION ---
-// Triggers a switch ON, then finds and triggers any slaves (Chain Reaction).
-// Also handles Exclusive conflicts for every switch in the chain.
-// --- RECURSIVE TRIGGER FUNCTION (Updated) ---
-// Now accepts specific masks to allow per-action grouping
+// --- RECURSIVE TRIGGER OFF FUNCTION ---
+// Handles the "Chain Reaction" for turning switches OFF.
+// If Master2 turns off Master1, this function ensures Master1 also turns off its Slaves.
+void trigger_switch_off(uint8_t bank, uint8_t idx) {
+    
+    // 1. Safety Check: If already OFF, do nothing (stops infinite loops)
+    if (!sw_toggled_on[bank][idx]) return;
+
+    // 2. Turn This Switch OFF
+    sw_toggled_on[bank][idx] = false;
+    sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[bank].switches[idx];
+    
+    // Send MIDI "Release/Off" Message
+    send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0);
+
+    // 3. Recursive Cascade (Kill Slaves)
+    // We use the Release Master Mask (l_master) to find slaves to kill.
+    if (cfg->l_master > 0) {
+        for (int b = 0; b < BANK_COUNT; b++) {
+            for (int s = 0; s < SWITCH_COUNT; s++) {
+                if (b == bank && s == idx) continue;
+                
+                sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
+
+                // Do I lead this slave?
+                if ((other->incl_mask & cfg->l_master) != 0) {
+                    // RECURSIVE CALL: Kill the slave!
+                    // This allows the off-signal to travel down the chain (MS2 -> MS1 -> SS)
+                    trigger_switch_off(b, s);
+                }
+            }
+        }
+    }
+}
+
+// --- RECURSIVE TRIGGER ON FUNCTION ---
+// Updated to use trigger_switch_off for Exclusive conflicts
 void trigger_switch_on(uint8_t bank, uint8_t idx, uint8_t active_excl, uint8_t active_master) {
     
-    // 1. Safety Check
     if (sw_toggled_on[bank][idx]) return;
 
-    // 2. Turn This Switch ON
     sw_toggled_on[bank][idx] = true;
     sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[bank].switches[idx];
     
-    // Send MIDI "Press" Message
     send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
 
-    // 3. Handle EXCLUSIVE Conflicts (Using custom mask)
+    // 1. Handle EXCLUSIVE Conflicts
     if (active_excl > 0) {
         for (int b = 0; b < BANK_COUNT; b++) {
             for (int s = 0; s < SWITCH_COUNT; s++) {
                 if (b == bank && s == idx) continue; 
                 
                 sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
-                // Compare My Active Mask vs Their Base Press Mask (Identity)
                 if ((other->p_excl & active_excl) != 0) {
-                    if (sw_toggled_on[b][s]) {
-                        sw_toggled_on[b][s] = false;
-                        send_midi_msg(other->l_type, other->l_chan, other->l_d1, 0);
-                    }
+                    // NEW: Use Recursive Off!
+                    // If we kill a rival Master, we want its slaves to die too.
+                    trigger_switch_off(b, s);
                 }
             }
         }
     }
 
-    // 4. Handle INCLUSIVE Cascades (Using custom mask)
+    // 2. Handle INCLUSIVE Cascades
     if (active_master > 0) {
         for (int b = 0; b < BANK_COUNT; b++) {
             for (int s = 0; s < SWITCH_COUNT; s++) {
@@ -1109,9 +1136,7 @@ void trigger_switch_on(uint8_t bank, uint8_t idx, uint8_t active_excl, uint8_t a
                 
                 sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
                 
-                // Do I command this switch?
                 if ((other->incl_mask & active_master) != 0) {
-                    // Trigger the slave using ITS OWN default Press masks (Chain reaction)
                     trigger_switch_on(b, s, other->p_excl, other->p_master);
                 }
             }
@@ -1238,35 +1263,17 @@ void midi_task(void *pv) {
                         is_cycling = true; 
                     }
 
-                    // B. Standard Logic (Using Recursive Trigger)
+                    // B. Standard Logic
                     if (!is_cycling) { 
                         // --- TOGGLE MODE ---
                         if (cfg->toggle_mode) {
                             if (!sw_toggled_on[dev_cfg.current_bank][i]) {
-                                // CASE: Turning ON -> Use 'p' Masks
+                                // CASE: Turning ON
                                 trigger_switch_on(dev_cfg.current_bank, i, cfg->p_excl, cfg->p_master);
                             } else {
-                                // CASE: Turning OFF -> Use 'l' (Release) Masks
-                                sw_toggled_on[dev_cfg.current_bank][i] = false;
-                                send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0);
-                                
-                                // === SLAVE KILL SWITCH (Using Release Master Mask) ===
-                                if (cfg->l_master > 0) {
-                                    for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
-                                        for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
-                                            if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-                                            sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
-
-                                            if ((other_cfg->incl_mask & cfg->l_master) != 0) {
-                                                // If slave is ON, force it OFF
-                                                if (sw_toggled_on[b_scan][s_scan]) {
-                                                    send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
-                                                    sw_toggled_on[b_scan][s_scan] = false;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                // CASE: Turning OFF
+                                // Use Recursive OFF to ensure slaves of slaves die too
+                                trigger_switch_off(dev_cfg.current_bank, i);
                             }
                         } 
                         // --- MOMENTARY MODE ---
@@ -1274,7 +1281,6 @@ void midi_task(void *pv) {
                             if (sw_toggled_on[dev_cfg.current_bank][i]) {
                                 sw_toggled_on[dev_cfg.current_bank][i] = false;
                             }
-                            // Trigger ON using 'p' Masks
                             trigger_switch_on(dev_cfg.current_bank, i, cfg->p_excl, cfg->p_master);
                         }
                     }
@@ -1284,30 +1290,10 @@ void midi_task(void *pv) {
                 } else { 
                 // === RELEASE EVENT ===
                     if(cfg->p_type < 250) { 
-                        
                         // Handle Momentary Release
                         if (!cfg->toggle_mode) { 
-                            // 1. Send MASTER Note Off
-                            send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0); 
-                            sw_toggled_on[dev_cfg.current_bank][i] = false;
-
-                            // 2. RELEASE SLAVES (Using Release Master Mask)
-                            if (cfg->l_master > 0) {
-                                for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
-                                    for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
-                                        if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-                                        sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
-
-                                        if ((other_cfg->incl_mask & cfg->l_master) != 0) {
-                                            // Force Slave OFF
-                                            if (sw_toggled_on[b_scan][s_scan]) {
-                                                send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
-                                                sw_toggled_on[b_scan][s_scan] = false;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            // Use Recursive OFF to clean up Master AND all Slaves
+                            trigger_switch_off(dev_cfg.current_bank, i);
                         }
                     }
                 }
@@ -1322,24 +1308,22 @@ void midi_task(void *pv) {
                     send_midi_msg(cfg->lp_type, cfg->lp_chan, cfg->lp_d1, 127); 
 
                     // --- LONG PRESS GROUPING LOGIC ---
-                    // 1. LP Exclusive (Kill Rivals)
+                    // 1. LP Exclusive (Recursive Off)
                     if (cfg->lp_excl > 0) {
                          for (int b = 0; b < BANK_COUNT; b++) {
                             for (int s = 0; s < SWITCH_COUNT; s++) {
                                 if (b == dev_cfg.current_bank && s == i) continue; 
                                 sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
-                                // Compare against rival's SHORT PRESS mask (Identity)
+                                
                                 if ((other->p_excl & cfg->lp_excl) != 0) {
-                                    if (sw_toggled_on[b][s]) {
-                                        sw_toggled_on[b][s] = false;
-                                        send_midi_msg(other->l_type, other->l_chan, other->l_d1, 0);
-                                    }
+                                     // Recursive kill for rivals
+                                     trigger_switch_off(b, s);
                                 }
                             }
                         }
                     }
                     
-                    // 2. LP Master (Trigger Slaves)
+                    // 2. LP Master (Recursive On)
                     if (cfg->lp_master > 0) {
                         for (int b = 0; b < BANK_COUNT; b++) {
                             for (int s = 0; s < SWITCH_COUNT; s++) {
@@ -1347,13 +1331,11 @@ void midi_task(void *pv) {
                                 sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
                                 
                                 if ((other->incl_mask & cfg->lp_master) != 0) {
-                                    // Trigger the slave (using ITS standard Press masks)
                                     trigger_switch_on(b, s, other->p_excl, other->p_master);
                                 }
                             }
                         }
                     }
-                    // ---------------------------------
                     
                     flash_end_time = now_ms + 50; 
                     flash_source_sw_idx = i; 
