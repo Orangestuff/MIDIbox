@@ -299,28 +299,38 @@ const char* INDEX_HTML = R"=====(
             const togEnabled = (s.tog !== undefined) ? s.tog : false; 
             const lpClass = (s.lp_en && !isBank) ? "" : "disabled style='opacity:0.5;'";
 
-            const mkInputs = (type, ch, val, ex, lead, k_type, k_ex, k_lead) => `
+// 3. Helper for generating input rows
+            const mkInputs = (type, ch, val, ex, lead, k_type, k_ex, k_lead) => {
+                // LOGIC: Hide 'Exclusive' input if this is a Release action ('l')
+                const hideExcl = (k_type === 'l') ? "visibility:hidden;" : "";
+                
+                return `
                 <div class='input-group'>
                     <select onchange="upd(${i},'${k_type}',0,this.value)" style="width:90px;">
                         ${(k_type=='p'?genMainTypes(type):genSecTypes(type))}
                     </select>
+                    
                     <input ${bankDisable} type='number' value='${ch + 1}' 
                         onchange="upd(${i},'${k_type}',1,this.value)" 
                         min='1' max='16' title="Ch" style="width:50px;">
+                        
                     <input ${bankDisable} type='number' value='${val}' 
                         onchange="upd(${i},'${k_type}',2,this.value)" 
                         min='0' max='127' title="Val" style="width:50px;">
+                    
                     <div style="display:flex; align-items:center; gap:2px; margin-left:5px; border-left:1px solid #444; padding-left:5px;">
                         <input type="text" placeholder="Ex" title="Exclusive Mask" 
-                            style="width:30px; border-color:#e74c3c;" 
+                            style="width:30px; border-color:#e74c3c; ${hideExcl}" 
                             value="${fromMask(ex)}" 
                             onchange="updVal(${i}, '${k_ex}', this.value)" ${bankDisable}>
+                            
                         <input type="text" placeholder="Ld" title="Lead/Master Mask" 
                             style="width:30px; border-color:#f1c40f;" 
                             value="${fromMask(lead)}" 
                             onchange="updVal(${i}, '${k_lead}', this.value)" ${bankDisable}>
                     </div>
                 </div>`;
+            };
 
             html += `
             <div class='sw'>
