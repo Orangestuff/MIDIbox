@@ -295,75 +295,58 @@ function render() {
         let html = '';
         
         bank.switches.forEach((s, i) => {
-            
-            // CHECK: Is this a Bank Navigation Switch? (Type >= 250)
             const isBank = (s.p[0] >= 250);
-            
-            // If yes, we disable EVERYTHING else
             const bankDisable = isBank ? "disabled style='opacity:0.5; pointer-events:none;'" : "";
-            
-            // Long Press Logic (Standard disable if feature off)
             const lpClass = (s.lp_en && !isBank) ? "" : "disabled style='opacity:0.5;'";
 
-            // Unpack Values
-            const togEnabled = (s.tog !== undefined) ? s.tog : false; 
-            const exclText = (s.excl !== undefined) ? fromMask(s.excl) : ""; 
+            // Unpack Membership (Global) & Toggle
             const inclText = (s.incl !== undefined) ? fromMask(s.incl) : ""; 
-            const masterText = (s.im !== undefined) ? fromMask(s.im) : "";
+            const togEnabled = (s.tog !== undefined) ? s.tog : false; 
+
+            // Helper for row inputs
+            const mkInputs = (type, ch, val, ex, lead, k_type, k_ex, k_lead) => `
+                <div class='input-group'>
+                    <select onchange="upd(${i},'${k_type}',0,this.value)" style="width:90px;">${(k_type=='p'?genMainTypes(type):genSecTypes(type))}</select>
+                    <input ${bankDisable} type='number' value='${ch + 1}' onchange="upd(${i},'${k_type}',1,this.value)" min='1' max='16' title="Ch" style="width:40px;">
+                    <input ${bankDisable} type='number' value='${val}' onchange="upd(${i},'${k_type}',2,this.value)" min='0' max='127' title="Val" style="width:40px;">
+                    
+                    <div style="display:flex; align-items:center; gap:2px; margin-left:5px; border-left:1px solid #444; padding-left:5px;">
+                        <input type="text" placeholder="Ex" title="Exclusive Mask" style="width:30px; border-color:#e74c3c;" value="${fromMask(ex)}" onchange="updVal(${i}, '${k_ex}', this.value)" ${bankDisable}>
+                        <input type="text" placeholder="Ld" title="Lead/Master Mask" style="width:30px; border-color:#f1c40f;" value="${fromMask(lead)}" onchange="updVal(${i}, '${k_lead}', this.value)" ${bankDisable}>
+                    </div>
+                </div>`;
 
             html += `
             <div class='sw'>
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:10px;">
                     <h3 style="margin:0; border:none;">SWITCH ${i+1}</h3>
-                    
-                    <div style="display:flex; align-items:center; gap:5px; transition:opacity 0.2s;" ${isBank ? "style='opacity:0.3; pointer-events:none;'" : ""}>
-                        
-                        <div style="display:flex; flex-direction:column; align-items:center;">
-                            <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#e74c3c;">EXCL</label>
-                            <input type="text" placeholder="1,2" style="width:50px; padding:2px; text-align:center; border:1px solid #e74c3c; background:#2d2d2d; color:#fff;" value="${exclText}" onchange="updVal(${i}, 'excl', this.value)" ${bankDisable}>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <div style="display:flex; align-items:center; gap:2px;" title="Groups I belong to">
+                            <label style="font-size:0.6em; color:#2ecc71;">INCL</label>
+                            <input type="text" style="width:40px; border:1px solid #2ecc71;" value="${inclText}" onchange="updVal(${i}, 'incl', this.value)" ${bankDisable}>
                         </div>
-
-                        <div style="display:flex; flex-direction:column; align-items:center;">
-                            <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#2ecc71;">INCL</label>
-                            <input type="text" placeholder="3,4" style="width:50px; padding:2px; text-align:center; border:1px solid #2ecc71; background:#2d2d2d; color:#fff;" value="${inclText}" onchange="updVal(${i}, 'incl', this.value)" ${bankDisable}>
-                        </div>
-                        
-                        <div style="display:flex; flex-direction:column; align-items:center;">
-                            <label style="margin:0; font-size:0.6em; margin-bottom:2px; color:#f1c40f;">LEAD</label>
-                            <input type="text" placeholder="3" style="width:50px; padding:2px; text-align:center; border:1px solid #f1c40f; background:#2d2d2d; color:#fff;" value="${masterText}" onchange="updVal(${i}, 'im', this.value)" ${bankDisable}>
-                        </div>
-
-                        <div style="display:flex; flex-direction:column; align-items:center; margin-left:5px;">
-                            <label style="margin:0; font-size:0.6em; margin-bottom:2px;">TOGGLE</label>
+                        <div style="display:flex; align-items:center;">
+                            <label style="font-size:0.6em; margin-right:2px;">TOG</label>
                             <input type="checkbox" ${togEnabled ? "checked" : ""} onchange="updBool(${i}, 'tog', this.checked)" ${bankDisable}>
                         </div>
                     </div>
                 </div>
 
                 <div class='grid-section'>
-                    <label>Short Press / Function</label>
-                    <div class='input-group'>
-                        <select onchange="upd(${i},'p',0,this.value)">${genMainTypes(s.p[0])}</select>
-                        
-                        <input ${bankDisable} type='number' value='${s.p[1] + 1}' onchange="upd(${i},'p',1,this.value)" min='1' max='16' title="Channel">
-                        <input ${bankDisable} type='number' value='${s.p[2]}' onchange="upd(${i},'p',2,this.value)" min='0' max='127' title="Value">
-                    </div>
+                    <label>Short Press</label>
+                    ${mkInputs(s.p[0], s.p[1], s.p[2], s.pe, s.pm, 'p', 'pe', 'pm')}
                     
                     <div class="label-row" ${bankDisable}>
-                        <label>Long Press (Momentary Only)</label>
-                        <input type="checkbox" style="width:auto;" ${s.lp_en ? "checked" : ""} onchange="updBool(${i}, 'lp_en', this.checked)" ${bankDisable}>
+                        <label>Long Press</label>
+                        <input type="checkbox" ${s.lp_en ? "checked" : ""} onchange="updBool(${i}, 'lp_en', this.checked)">
                     </div>
-                    <div class='input-group' ${lpClass} ${bankDisable}>
-                        <select onchange="upd(${i},'lp',0,this.value)">${genSecTypes(s.lp[0])}</select>
-                        <input type='number' value='${s.lp[1] + 1}' onchange="upd(${i},'lp',1,this.value)" min='1' max='16'>
-                        <input type='number' value='${s.lp[2]}' onchange="upd(${i},'lp',2,this.value)" min='0' max='127'>
+                    <div ${lpClass} ${bankDisable}>
+                        ${mkInputs(s.lp[0], s.lp[1], s.lp[2], s.lpe, s.lpm, 'lp', 'lpe', 'lpm')}
                     </div>
 
-                    <label ${bankDisable}>Release / Toggle OFF</label>
-                    <div class='input-group' ${bankDisable}>
-                        <select onchange="upd(${i},'l',0,this.value)">${genSecTypes(s.l[0])}</select>
-                        <input type='number' value='${s.l[1] + 1}' onchange="upd(${i},'l',1,this.value)" min='1' max='16'>
-                        <input type='number' value='${s.l[2]}' onchange="upd(${i},'l',2,this.value)" min='0' max='127'>
+                    <label ${bankDisable}>Release / Off</label>
+                    <div ${bankDisable}>
+                        ${mkInputs(s.l[0], s.l[1], s.l[2], s.le, s.lm, 'l', 'le', 'lm')}
                     </div>
                 </div>
             </div>`;
