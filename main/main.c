@@ -589,7 +589,7 @@ void refresh_leds() {
 }
 
 void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *btn_held) {
-    uint32_t dim_factor = dev_cfg.global_brightness; 
+    uint32_t global_br = dev_cfg.global_brightness; 
 
     // --- 1. SET BATTERY LED (Index 0) ---
     if (voltage > 3.9) {
@@ -601,13 +601,8 @@ void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *
     }
 
     // --- 2. SET SWITCH LEDS ---
-    // Calculate the default color for the CURRENT bank
-    uint8_t cur_r = (BANK_COLORS[current_bank][0] * dim_factor) / 255;
-    uint8_t cur_g = (BANK_COLORS[current_bank][1] * dim_factor) / 255;
-    uint8_t cur_b = (BANK_COLORS[current_bank][2] * dim_factor) / 255;
-
     for (int i = 0; i < SWITCH_COUNT; i++) {
-        // Map Switch Index to LED Index (Snake Logic: 1-4 asc, 5-8 desc)
+        // Map Switch Index to LED Index (Snake Logic)
         int led_idx;
         if (i < 4) led_idx = i + 1;
         else led_idx = 12 - i;
@@ -615,49 +610,54 @@ void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *
         // Get config for this switch
         sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[current_bank].switches[i];
         
-        // --- DETERMINE COLOR & STATE ---
         uint8_t r = 0, g = 0, b = 0;
-        bool led_on = false;
-
-        // CASE A: Direct Bank Select Switch (Types 252-255)
-        // These switches ALWAYS show the color of the bank they switch to.
+        
+        // --- CASE A: DIRECT BANK SWITCH (Navigation) ---
+        // We want these to show the TARGET color, but DIMMED so they don't look "Active".
         if (cfg->p_type >= 252 && cfg->p_type <= 255) {
-            uint8_t target_b = cfg->p_type - 252; // 252->0, 253->1...
+            uint8_t target_b = cfg->p_type - 252;
             
-            // Calculate color of the TARGET bank
-            r = (BANK_COLORS[target_b][0] * dim_factor) / 255;
-            g = (BANK_COLORS[target_b][1] * dim_factor) / 255;
-            b = (BANK_COLORS[target_b][2] * dim_factor) / 255;
-            
-            // Logic: Always ON (Navigation Marker)
-            led_on = true; 
+            // Scaled down to 5% brightness
+            r = (BANK_COLORS[target_b][0] * global_br) / 4000; 
+            g = (BANK_COLORS[target_b][1] * global_br) / 4000;
+            b = (BANK_COLORS[target_b][2] * global_br) / 4000;
         }
         
-        // CASE B: Cycle Bank Switch (Next/Prev)
-        // These are navigation switches, usually kept lit so you can find them.
+        // --- CASE B: CYCLE SWITCH (Next/Prev) ---
         else if (cfg->p_type == 250 || cfg->p_type == 251) {
-            // Use current bank color (or you could force white here if preferred)
-            r = cur_r; g = cur_g; b = cur_b;
-            led_on = true;
+            // Keep cycle switches fairly bright (50%) using Current Bank Color
+            r = (BANK_COLORS[current_bank][0] * global_br) / 512;
+            g = (BANK_COLORS[current_bank][1] * global_br) / 512;
+            b = (BANK_COLORS[current_bank][2] * global_br) / 512;
         }
 
-        // CASE C: Standard MIDI Switch / None
+        // --- CASE C: STANDARD MIDI SWITCH ---
         else {
-            // Use Current Bank Color
-            r = cur_r; g = cur_g; b = cur_b;
-            
-            // Light up if Toggled ON or currently Held Down
-            if (sw_states[i] || btn_held[i]) {
-                led_on = true;
+            bool is_active = sw_states[i] || btn_held[i];
+
+            if (is_active) {
+                // ACTIVE: 100% Brightness (Current Bank Color)
+                r = (BANK_COLORS[current_bank][0] * global_br) / 255;
+                g = (BANK_COLORS[current_bank][1] * global_br) / 255;
+                b = (BANK_COLORS[current_bank][2] * global_br) / 255;
+            } else {
+                // INACTIVE (Backlight): 25% Brightness (Current Bank Color)
+                // This provides the visual "Glue" to tell you which bank you are in.
+                r = (BANK_COLORS[current_bank][0] * global_br) / 4000; // Very dim
+                g = (BANK_COLORS[current_bank][1] * global_br) / 4000;
+                b = (BANK_COLORS[current_bank][2] * global_br) / 4000;
+                
+                // Ensure at least faint light if global brightness is high enough
+                if (global_br > 50 && r==0 && g==0 && b==0) {
+                     // Force minimum glow if color is non-black
+                     if (BANK_COLORS[current_bank][0] > 0) r = 1;
+                     if (BANK_COLORS[current_bank][1] > 0) g = 1;
+                     if (BANK_COLORS[current_bank][2] > 0) b = 1;
+                }
             }
         }
 
-        // --- APPLY TO PIXEL ---
-        if (led_on) {
-            set_pixel(led_idx, r, g, b);
-        } else {
-            set_pixel(led_idx, 0, 0, 0);
-        }
+        set_pixel(led_idx, r, g, b);
     }
     
     refresh_leds();
