@@ -1,9 +1,13 @@
 #ifndef INDEX_H
 #define INDEX_H
 
-const char* INDEX_HTML = R"=====(
-<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>
-<style>
+    const char* INDEX_HTML = R"=====(
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset='UTF-8'> <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <style>
+    /* ... rest of your CSS ... */
     body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #121212; color: #e0e0e0; padding: 20px; max-width: 1200px; margin: auto; }
     h2 { color: #00d1b2; text-align: center; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 30px; }
     
@@ -21,14 +25,14 @@ const char* INDEX_HTML = R"=====(
     
     #sws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; }
     
-    .sw { background: #1e1e1e; padding: 12px; border-radius: 8px; border-top: 5px solid #00d1b2; box-shadow: 0 4px 8px rgba(0,0,0,0.4); transition: 0.3s; }
+    .sw { background: #1e1e1e; padding: 15px; border-radius: 8px; border-top: 5px solid #00d1b2; box-shadow: 0 4px 8px rgba(0,0,0,0.4); transition: 0.3s; }
     .sw h3 { margin: 0 0 10px 0; font-size: 0.9em; text-align: center; color: #00d1b2; border-bottom: 1px solid #333; padding-bottom: 5px; }
 
     .grid-section { margin-bottom: 10px; }
     .label-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
     label { font-size: 0.65em; color: #888; text-transform: uppercase; }
     .input-group { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 4px; margin-bottom: 8px; transition: 0.3s; }
-    .disabled { opacity: 0.3; pointer-events: none; } 
+    .disabled { opacity: 0.2; filter: grayscale(100%); pointer-events: none; }
 
     select, input[type=number], input[type=text], input[type=password] { background: #2d2d2d; color: #fff; border: 1px solid #444; padding: 6px; border-radius: 4px; width: 100%; font-size: 0.85em; box-sizing: border-box; }
     input:focus, select:focus { border-color: #00d1b2; outline: none; }
@@ -43,6 +47,15 @@ const char* INDEX_HTML = R"=====(
     
     @media (max-width: 1000px) { #sws { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 600px) { #sws { grid-template-columns: 1fr; } .wifi-grid { grid-template-columns: 1fr; } }
+
+    /* --- STYLES FOR ACCORDION & SMART HIDING --- */
+    details { background: #252525; padding: 5px; border-radius: 4px; margin-top: 5px; }
+    summary { cursor: pointer; font-size: 0.75em; color: #aaa; outline: none; padding: 5px; font-weight: bold; text-transform: uppercase; list-style: none; }
+    summary::-webkit-details-marker { display: none; } /* Hide default triangle */
+    summary:after { content: '+'; float: right; font-weight: bold; }
+    details[open] summary:after { content: '-'; }
+    
+    .hidden-input { display: none !important; }
 </style></head>
 <body>
     <h2>MIDI Pedal Master Config</h2>
@@ -276,7 +289,7 @@ const char* INDEX_HTML = R"=====(
         render(); 
     }
     
-    // FIXED: Now handles the new per-action grouping keys
+    // Updated updVal to handle keys correctly
     window.updVal = function(swIdx, key, val) {
         if(!fullData) return;
         // Check for ALL mask keys
@@ -287,86 +300,108 @@ const char* INDEX_HTML = R"=====(
         }
     }
 
-    function render() {
+function render() {
         if(!fullData) return;
         const bank = fullData.banks[curBank];
         let html = '';
         
         bank.switches.forEach((s, i) => {
+            // 1. Determine States
             const isBank = (s.p[0] >= 250);
-            const bankDisable = isBank ? "disabled style='opacity:0.5; pointer-events:none;'" : "";
+            
+            // Visual Classes
+            const disClass = isBank ? "disabled" : ""; 
+            const disAttr = isBank ? "disabled" : "";
+
             const inclText = (s.incl !== undefined) ? fromMask(s.incl) : ""; 
             const togEnabled = (s.tog !== undefined) ? s.tog : false; 
-            const lpClass = (s.lp_en && !isBank) ? "" : "disabled style='opacity:0.5;'";
+            
+            // LOGIC FIX: If isBank is true, force 'open' to false (collapse)
+            // Otherwise, check if there is actual data to decide if we should auto-open
+            const openLp = (!isBank && (s.lp[0] !== 0 || s.lp_en)) ? "open" : "";
+            const openRel = (!isBank && (s.l[0] !== 0)) ? "open" : "";
 
-// 3. Helper for generating input rows
+            // INPUT GENERATOR
             const mkInputs = (type, ch, val, ex, lead, k_type, k_ex, k_lead) => {
-                // LOGIC: Hide 'Exclusive' input if this is a Release action ('l')
+                const hideClass = (type === 0) ? "hidden-input" : "";
                 const hideExcl = (k_type === 'l') ? "visibility:hidden;" : "";
-                
+
                 return `
-                <div class='input-group'>
-                    <select onchange="upd(${i},'${k_type}',0,this.value)" style="width:90px;">
+                <div class='input-group' style="grid-template-columns: ${type===0 ? '1fr' : '1.5fr 1fr 1fr'};">
+                    <select onchange="upd(${i},'${k_type}',0,this.value)">
                         ${(k_type=='p'?genMainTypes(type):genSecTypes(type))}
                     </select>
                     
-                    <input ${bankDisable} type='number' value='${ch + 1}' 
+                    <input class="${hideClass} ${disClass}" ${disAttr} type='number' value='${ch + 1}' 
                         onchange="upd(${i},'${k_type}',1,this.value)" 
-                        min='1' max='16' title="Ch" style="width:50px;">
+                        min='1' max='16' title="Channel">
                         
-                    <input ${bankDisable} type='number' value='${val}' 
+                    <input class="${hideClass} ${disClass}" ${disAttr} type='number' value='${val}' 
                         onchange="upd(${i},'${k_type}',2,this.value)" 
-                        min='0' max='127' title="Val" style="width:50px;">
+                        min='0' max='127' title="Value">
                     
-                    <div style="display:flex; align-items:center; gap:2px; margin-left:5px; border-left:1px solid #444; padding-left:5px;">
-                        <input type="text" placeholder="Ex" title="Exclusive Mask" 
+                    <div class="${hideClass}" style="display:flex; align-items:center; gap:2px; margin-left:5px; border-left:1px solid #444; padding-left:5px;">
+                        <input class="${disClass}" ${disAttr} type="text" placeholder="Ex" title="Exclusive Mask (🛡️)" 
                             style="width:30px; border-color:#e74c3c; ${hideExcl}" 
                             value="${fromMask(ex)}" 
-                            onchange="updVal(${i}, '${k_ex}', this.value)" ${bankDisable}>
+                            onchange="updVal(${i}, '${k_ex}', this.value)">
                             
-                        <input type="text" placeholder="Ld" title="Lead/Master Mask" 
+                        <input class="${disClass}" ${disAttr} type="text" placeholder="Ld" title="Lead/Master Mask (⚡)" 
                             style="width:30px; border-color:#f1c40f;" 
                             value="${fromMask(lead)}" 
-                            onchange="updVal(${i}, '${k_lead}', this.value)" ${bankDisable}>
+                            onchange="updVal(${i}, '${k_lead}', this.value)">
                     </div>
                 </div>`;
             };
 
             html += `
             <div class='sw'>
-                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:10px;">
-                    <h3 style="margin:0; border:none;">SWITCH ${i+1}</h3>
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:10px;">
+                    <h3 style="margin:0; border:none; font-size:1em;">SWITCH ${i+1}</h3>
+                    
                     <div style="display:flex; align-items:center; gap:10px;">
-                        <div style="display:flex; align-items:center; gap:2px;" title="Groups I belong to">
-                            <label style="font-size:0.6em; color:#2ecc71;">INCL</label>
-                            <input type="text" style="width:40px; border:1px solid #2ecc71;" 
+                        <div style="display:flex; align-items:center; gap:4px;" title="Groups this switch belongs to (Slave)">
+                            <label style="font-size:1.2em; margin:0;">🔗</label>
+                            <input class="${disClass}" ${disAttr} type="text" 
+                                style="width:40px; border:1px solid #2ecc71; text-align:center;" 
                                 value="${inclText}" 
-                                onchange="updVal(${i}, 'incl', this.value)" ${bankDisable}>
+                                onchange="updVal(${i}, 'incl', this.value)">
                         </div>
-                        <div style="display:flex; align-items:center;">
-                            <label style="font-size:0.6em; margin-right:2px;">TOG</label>
-                            <input type="checkbox" ${togEnabled ? "checked" : ""} 
-                                onchange="updBool(${i}, 'tog', this.checked)" ${bankDisable}>
+                        
+                        <div style="display:flex; align-items:center; background:#252525; padding:2px 6px; border-radius:4px;">
+                            <label style="font-size:0.7em; margin-right:4px; font-weight:bold;">TOGGLE</label>
+                            <input class="${disClass}" ${disAttr} type="checkbox" ${togEnabled ? "checked" : ""} 
+                                onchange="updBool(${i}, 'tog', this.checked)">
                         </div>
                     </div>
                 </div>
 
                 <div class='grid-section'>
-                    <label>Short Press</label>
+                    <label style="color:#00d1b2; font-weight:bold;">Short Press</label>
                     ${mkInputs(s.p[0], s.p[1], s.p[2], s.pe, s.pm, 'p', 'pe', 'pm')}
-                    <div class="label-row" ${bankDisable}>
-                        <label>Long Press</label>
-                        <input type="checkbox" ${s.lp_en ? "checked" : ""} 
-                            onchange="updBool(${i}, 'lp_en', this.checked)">
+                </div>
+
+                <details ${openLp} class="${disClass}" ${disAttr}>
+                    <summary>Long Press Options</summary>
+                    <div style="padding-top:5px;">
+                        <div class="label-row">
+                            <label>Enable Long Press</label>
+                            <input type="checkbox" ${s.lp_en ? "checked" : ""} 
+                                onchange="updBool(${i}, 'lp_en', this.checked)">
+                        </div>
+                        <div style="${s.lp_en ? '' : 'opacity:0.5; pointer-events:none;'}">
+                            ${mkInputs(s.lp[0], s.lp[1], s.lp[2], s.lpe, s.lpm, 'lp', 'lpe', 'lpm')}
+                        </div>
                     </div>
-                    <div ${lpClass} ${bankDisable}>
-                        ${mkInputs(s.lp[0], s.lp[1], s.lp[2], s.lpe, s.lpm, 'lp', 'lpe', 'lpm')}
-                    </div>
-                    <label ${bankDisable}>Release / Off</label>
-                    <div ${bankDisable}>
+                </details>
+
+                <details ${openRel} class="${disClass}" ${disAttr}>
+                    <summary>Release / Off Options</summary>
+                    <div style="padding-top:5px;">
                         ${mkInputs(s.l[0], s.l[1], s.l[2], s.le, s.lm, 'l', 'le', 'lm')}
                     </div>
-                </div>
+                </details>
+                
             </div>`;
         });
         document.getElementById('sws').innerHTML = html;
