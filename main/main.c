@@ -516,6 +516,7 @@ void set_wifi_mode(bool enable) {
 }
 
 void send_midi_msg(uint8_t type, uint8_t chan, uint8_t val, uint8_t velocity) {
+    if (type == 0) return; // "None" type: Do nothing
     if (tud_midi_mounted()) { 
         uint8_t packet[4] = {0};
         uint8_t stat = type | (chan & 0x0F);
@@ -600,33 +601,65 @@ void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *
     }
 
     // --- 2. SET SWITCH LEDS ---
-    uint8_t br = BANK_COLORS[current_bank][0];
-    uint8_t bg = BANK_COLORS[current_bank][1];
-    uint8_t bb = BANK_COLORS[current_bank][2];
-
-    br = (br * dim_factor) / 255;
-    bg = (bg * dim_factor) / 255;
-    bb = (bb * dim_factor) / 255;
+    // Calculate the default color for the CURRENT bank
+    uint8_t cur_r = (BANK_COLORS[current_bank][0] * dim_factor) / 255;
+    uint8_t cur_g = (BANK_COLORS[current_bank][1] * dim_factor) / 255;
+    uint8_t cur_b = (BANK_COLORS[current_bank][2] * dim_factor) / 255;
 
     for (int i = 0; i < SWITCH_COUNT; i++) {
-        // Get config to check if this is a BANK switch
-        sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[current_bank].switches[i];
-        bool is_bank_sw = (cfg->p_type == 250 || cfg->p_type == 251);
-
-        // LED is ON if: Toggled OR Held OR it's a Bank Switch
-        bool is_active = sw_states[i] || btn_held[i] || is_bank_sw;
-        
-        // Map Switch Index to LED Index (Snake Logic)
+        // Map Switch Index to LED Index (Snake Logic: 1-4 asc, 5-8 desc)
         int led_idx;
         if (i < 4) led_idx = i + 1;
         else led_idx = 12 - i;
 
-        if (is_active) {
-            set_pixel(led_idx, br, bg, bb);
+        // Get config for this switch
+        sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[current_bank].switches[i];
+        
+        // --- DETERMINE COLOR & STATE ---
+        uint8_t r = 0, g = 0, b = 0;
+        bool led_on = false;
+
+        // CASE A: Direct Bank Select Switch (Types 252-255)
+        // These switches ALWAYS show the color of the bank they switch to.
+        if (cfg->p_type >= 252 && cfg->p_type <= 255) {
+            uint8_t target_b = cfg->p_type - 252; // 252->0, 253->1...
+            
+            // Calculate color of the TARGET bank
+            r = (BANK_COLORS[target_b][0] * dim_factor) / 255;
+            g = (BANK_COLORS[target_b][1] * dim_factor) / 255;
+            b = (BANK_COLORS[target_b][2] * dim_factor) / 255;
+            
+            // Logic: Always ON (Navigation Marker)
+            led_on = true; 
+        }
+        
+        // CASE B: Cycle Bank Switch (Next/Prev)
+        // These are navigation switches, usually kept lit so you can find them.
+        else if (cfg->p_type == 250 || cfg->p_type == 251) {
+            // Use current bank color (or you could force white here if preferred)
+            r = cur_r; g = cur_g; b = cur_b;
+            led_on = true;
+        }
+
+        // CASE C: Standard MIDI Switch / None
+        else {
+            // Use Current Bank Color
+            r = cur_r; g = cur_g; b = cur_b;
+            
+            // Light up if Toggled ON or currently Held Down
+            if (sw_states[i] || btn_held[i]) {
+                led_on = true;
+            }
+        }
+
+        // --- APPLY TO PIXEL ---
+        if (led_on) {
+            set_pixel(led_idx, r, g, b);
         } else {
             set_pixel(led_idx, 0, 0, 0);
         }
     }
+    
     refresh_leds();
 }
 
@@ -949,12 +982,68 @@ void app_main(void) {
 
     xTaskCreatePinnedToCore(midi_task, "midi", 4096, NULL, 5, NULL, 0);
 }
+
 // ... other variables ...
     uint32_t last_debounce_time[SWITCH_COUNT];
-    bool sw_toggled_on[SWITCH_COUNT];
-
+    bool sw_toggled_on[BANK_COUNT][SWITCH_COUNT] = {false};
     // NEW: Track which switch caused the flash
     int flash_source_sw_idx = -1;
+
+    // --- RECURSIVE TRIGGER FUNCTION ---
+// Triggers a switch ON, then finds and triggers any slaves (Chain Reaction).
+// Also handles Exclusive conflicts for every switch in the chain.
+void trigger_switch_on(uint8_t bank, uint8_t idx) {
+    
+    // 1. Safety Check: If already ON, stop (Prevents infinite loops)
+    if (sw_toggled_on[bank][idx]) return;
+
+    // 2. Turn This Switch ON
+    sw_toggled_on[bank][idx] = true;
+    sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[bank].switches[idx];
+    
+    // Send MIDI "Press" Message
+    send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
+
+    // 3. Handle EXCLUSIVE Conflicts (Kill others)
+    // "If I am part of an Exclusive group, turn off my rivals"
+    if (cfg->excl_mask > 0) {
+        for (int b = 0; b < BANK_COUNT; b++) {
+            for (int s = 0; s < SWITCH_COUNT; s++) {
+                if (b == bank && s == idx) continue; // Skip self
+                
+                sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
+                if ((other->excl_mask & cfg->excl_mask) != 0) {
+                    if (sw_toggled_on[b][s]) {
+                        // Turn Rival OFF
+                        sw_toggled_on[b][s] = false;
+                        send_midi_msg(other->l_type, other->l_chan, other->l_d1, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Handle INCLUSIVE Cascades (Trigger Slaves)
+    // "If I am a Master, find my slaves and trigger them too"
+    if (cfg->incl_master_mask > 0) {
+        for (int b = 0; b < BANK_COUNT; b++) {
+            for (int s = 0; s < SWITCH_COUNT; s++) {
+                if (b == bank && s == idx) continue; // Skip self
+                
+                sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
+                
+                // Do I command this switch?
+                if ((other->incl_mask & cfg->incl_master_mask) != 0) {
+                    // RECURSIVE CALL: Trigger the slave!
+                    // This will start the process again for the slave, 
+                    // allowing IT to trigger ITS own slaves (C->A->B)
+                    trigger_switch_on(b, s);
+                }
+            }
+        }
+    }
+}
+
 void midi_task(void *pv) {
     // --- SETUP RMT (LEDs) ---
     rmt_config_t config = RMT_DEFAULT_CONFIG_TX(LED_DATA_PIN, RMT_CHANNEL_0); 
@@ -969,8 +1058,8 @@ void midi_task(void *pv) {
     bool lp_triggered[SWITCH_COUNT]; 
     uint32_t last_debounce_time[SWITCH_COUNT];
     
-    // Toggle state tracking
-    bool sw_toggled_on[BANK_COUNT][SWITCH_COUNT];
+    // NOTE: sw_toggled_on is now a GLOBAL variable at the top of main.c
+    // Do not define it here locally!
     
     // Initialize Arrays
     for(int b=0; b<BANK_COUNT; b++) {
@@ -980,7 +1069,7 @@ void midi_task(void *pv) {
             press_start[i] = 0; 
             lp_triggered[i] = false; 
             last_debounce_time[i] = 0; 
-            sw_toggled_on[b][i] = false; 
+            // sw_toggled_on[b][i] = false; // Already handled by global init
         }
     }
     
@@ -993,30 +1082,26 @@ void midi_task(void *pv) {
     uint32_t flash_end_time = 0;      // When the flash should stop
     int flash_source_sw_idx = -1; 
 
-while(1) {
+    while(1) {
         // --- HIGH PRECISION TIME ---
-        // We use esp_timer for accurate ms tracking regardless of tick rate
         int64_t now_us = esp_timer_get_time();
         uint32_t now_ms = (uint32_t)(now_us / 1000);
 
         // ============================================================
         //  FAST LOOP (Executes every ~1ms)
-        //  Tasks: Matrix Scan, Debounce, MIDI Logic, Switch State
         // ============================================================
 
         // 1. SCAN MATRIX
         for (int r = 0; r < NUM_ROWS; r++) {
             gpio_set_level(ROW_PINS[r], 0); 
-            esp_rom_delay_us(10); // Short settle time for signal stability
+            esp_rom_delay_us(10); 
             for (int c = 0; c < NUM_COLS; c++) {
                 int sw_idx = MATRIX_MAP[r][c];
-                
-                // Active Low Logic (0 = Pressed)
-                bool pressed = (gpio_get_level(COL_PINS[c]) == 0);
+                bool pressed = (gpio_get_level(COL_PINS[c]) == 0); // Active Low
                 
                 // Debounce
                 if (pressed != button_state[sw_idx]) {
-                    if ((now_ms - last_debounce_time[sw_idx]) > 50) { // 50ms Debounce
+                    if ((now_ms - last_debounce_time[sw_idx]) > 50) { 
                         button_state[sw_idx] = pressed;
                         last_debounce_time[sw_idx] = now_ms;
                     }
@@ -1034,14 +1119,13 @@ while(1) {
                 bool new_wifi_mode = !is_wifi_on;
                 set_wifi_mode(new_wifi_mode);
                 
-                // Visual Confirmation (Quick Flash)
+                // Visual Confirmation
                 uint8_t r = new_wifi_mode ? dev_cfg.global_brightness : 0;
                 uint8_t g = new_wifi_mode ? dev_cfg.global_brightness : 0;
                 uint8_t b = dev_cfg.global_brightness;
 
                 for(int j=0; j<LED_COUNT; j++) set_pixel(j, r, g, b);
                 refresh_leds();
-                // We use vTaskDelay here because this is a rare "Mode Change" event
                 vTaskDelay(pdMS_TO_TICKS(500)); 
             }
         } else {
@@ -1054,159 +1138,109 @@ while(1) {
             bool s = button_state[i];
             bool last_s = last_button_state[i];
 
-            // Detect Edge (Press or Release)
+            // Detect Edge
             if (s != last_s) { 
                 sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[dev_cfg.current_bank].switches[i];
                 
                 // === PRESS EVENT ===
                 if (s == true) { 
-                    // Set Flash Trigger
-                    flash_end_time = now_ms + 50; // Flash for 50ms
+                    flash_end_time = now_ms + 50; 
                     flash_source_sw_idx = i;
 
                     bool is_cycling = false;
                     
-                    // A. Check for Bank Cycle Types (250/251)
-                    if (cfg->p_type == 250) { 
-                        dev_cfg.current_bank = (dev_cfg.current_bank - 1 + BANK_COUNT) % BANK_COUNT; 
-                        uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0); 
-                        is_cycling = true; 
-                    } 
-                    else if (cfg->p_type == 251) { 
-                        dev_cfg.current_bank = (dev_cfg.current_bank + 1) % BANK_COUNT; 
-                        uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0); 
-                        is_cycling = true;
-                    }
-
-// B. Standard MIDI / Toggle Logic (GLOBAL BANK + MOMENTARY MASTER + GRANULAR MASKS)
-                if (!is_cycling) { 
-                    
-                    // --- CASE 1: TOGGLE MODE ---
-                    if (cfg->toggle_mode) {
-                        // 1. Flip State Immediately
-                        bool new_state = !sw_toggled_on[dev_cfg.current_bank][i];
+                    // A. Check for Bank Switching / Special Types
+                    // 250=Rev, 251=Fwd, 252=B1, 253=B2, 254=B3, 255=B4
+                    if (cfg->p_type >= 250 && cfg->p_type <= 255) { 
                         
-                        // 2. Send MIDI & Update Self
-                        if (new_state) send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
-                        else           send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0);
-                        
-                        sw_toggled_on[dev_cfg.current_bank][i] = new_state;
-
-                        // ---------------------------------------------------------
-                        // GLOBAL INTERACTION SCANNER (TOGGLE)
-                        // ---------------------------------------------------------
-                        
-                        // 3. PASS 1: EXCLUSIVE GROUPS (Only runs if I turned ON)
-                        if (new_state == true && cfg->excl_mask > 0) {
-                            for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
-                                for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
-                                    
-                                    if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-                                    sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
-
-                                    if ((other_cfg->excl_mask & cfg->excl_mask) != 0) {
-                                        if (sw_toggled_on[b_scan][s_scan]) {
-                                            send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
-                                            sw_toggled_on[b_scan][s_scan] = false;
-                                        }
-                                    }
-                                }
+                        if (cfg->p_type == 250) { 
+                            // Previous Bank
+                            dev_cfg.current_bank = (dev_cfg.current_bank - 1 + BANK_COUNT) % BANK_COUNT; 
+                        } 
+                        else if (cfg->p_type == 251) { 
+                            // Next Bank
+                            dev_cfg.current_bank = (dev_cfg.current_bank + 1) % BANK_COUNT; 
+                        }
+                        else {
+                            // Direct Bank Select (252->Bank0, 253->Bank1, etc.)
+                            uint8_t target_bank = cfg->p_type - 252;
+                            if (target_bank < BANK_COUNT) {
+                                dev_cfg.current_bank = target_bank;
                             }
                         }
 
-                        // 4. PASS 2: INCLUSIVE GROUPS (GRANULAR MASTER LOGIC)
-                        // Use incl_master_mask to see exactly WHICH groups I lead
-                        if (cfg->incl_master_mask > 0) {
-                            if (new_state == true) { 
-                                for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
-                                    for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
-                                        
-                                        if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-                                        sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
+                        // Save the new bank state
+                        uint8_t trigger = 1; 
+                        xQueueSend(save_queue, &trigger, 0); 
+                        
+                        // Mark as cycling so we skip standard toggle/momentary logic
+                        is_cycling = true; 
+                    }
 
-                                        // CHECK: Does their Membership intersect with my Leadership?
-                                        if ((other_cfg->incl_mask & cfg->incl_master_mask) != 0) {
-                                            if (sw_toggled_on[b_scan][s_scan] == false) {
-                                                send_midi_msg(other_cfg->p_type, other_cfg->p_chan, other_cfg->p_d1, 127);
-                                                sw_toggled_on[b_scan][s_scan] = true;
+                    // B. Standard Logic (Using Recursive Trigger)
+                    if (!is_cycling) { 
+                        
+                        // --- TOGGLE MODE ---
+                        if (cfg->toggle_mode) {
+                            if (!sw_toggled_on[dev_cfg.current_bank][i]) {
+                                // CASE: Turning ON -> Use Recursive Trigger
+                                trigger_switch_on(dev_cfg.current_bank, i);
+                            } else {
+                                // CASE: Turning OFF -> Manual Off
+                                sw_toggled_on[dev_cfg.current_bank][i] = false;
+                                send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0);
+                                
+                                // === NEW FIX: Turn OFF Momentary Slaves ===
+                                // If I am a Master turning OFF, check for any Momentary slaves 
+                                // that are currently latching and force them OFF.
+                                if (cfg->incl_master_mask > 0) {
+                                    for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
+                                        for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
+                                            if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
+                                            sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
+
+                                            if ((other_cfg->incl_mask & cfg->incl_master_mask) != 0) {
+                                                // If slave is Momentary and currently ON, kill it
+                                                if (!other_cfg->toggle_mode) {
+                                                    if (sw_toggled_on[b_scan][s_scan]) {
+                                                        send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
+                                                        sw_toggled_on[b_scan][s_scan] = false;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
+                                // ==========================================
                             }
-                        }
-                    } 
-                    
-// --- CASE 2: MOMENTARY MODE ---
-                    else {
-                        // FIX: Force Toggle State to FALSE
-                        // This ensures that if the switch was previously Toggled ON, 
-                        // it clears immediately upon the next press.
-                        if (sw_toggled_on[dev_cfg.current_bank][i]) {
-                             sw_toggled_on[dev_cfg.current_bank][i] = false;
-                        }
-
-                        // 1. Momentary Press (Always Send ON)
-                        send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
+                        } 
                         
-                        // ---------------------------------------------------------
-                        // GLOBAL INTERACTION SCANNER (MOMENTARY)
-                        // ---------------------------------------------------------
-
-                        // 2. PASS 1: EXCLUSIVE GROUPS
-                        if (cfg->excl_mask > 0) {
-                            for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
-                                for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
-                                    
-                                    if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-                                    sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
-
-                                    if ((other_cfg->excl_mask & cfg->excl_mask) != 0) {
-                                        if (sw_toggled_on[b_scan][s_scan]) {
-                                            send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
-                                            sw_toggled_on[b_scan][s_scan] = false;
-                                        }
-                                    }
-                                }
+                        // --- MOMENTARY MODE ---
+                        else {
+                            // Ensure state is clear so trigger_switch_on accepts the input
+                            if (sw_toggled_on[dev_cfg.current_bank][i]) {
+                                sw_toggled_on[dev_cfg.current_bank][i] = false;
                             }
-                        }
-
-                        // 3. PASS 2: INCLUSIVE GROUPS (GRANULAR MASTER LOGIC)
-                        if (cfg->incl_master_mask > 0) { 
-                            for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
-                                for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
-                                    
-                                    if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
-                                    sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
-
-                                    // CHECK: Does their Membership intersect with my Leadership?
-                                    if ((other_cfg->incl_mask & cfg->incl_master_mask) != 0) {
-                                        if (sw_toggled_on[b_scan][s_scan] == false) {
-                                            send_midi_msg(other_cfg->p_type, other_cfg->p_chan, other_cfg->p_d1, 127);
-                                            sw_toggled_on[b_scan][s_scan] = true;
-                                        }
-                                    }
-                                }
-                            }
+                            // Trigger ON (and ripple to slaves)
+                            trigger_switch_on(dev_cfg.current_bank, i);
                         }
                     }
-                }
                     press_start[i] = now_ms; 
                     lp_triggered[i] = false; 
 
-} else { 
+                } else { 
                 // === RELEASE EVENT ===
-                    // Send note off only if NOT toggling and NOT a bank cycle
-                    if(!lp_triggered[i] && cfg->p_type != 250 && cfg->p_type != 251) { 
+                    if(cfg->p_type != 250 && cfg->p_type != 251) {
                         
                         // Handle Momentary Release
                         if (!cfg->toggle_mode) { 
                             // 1. Send MASTER Note Off
                             send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0); 
+                            
+                            // FIX: Turn OFF the Master LED explicitly
+                            sw_toggled_on[dev_cfg.current_bank][i] = false;
 
                             // 2. RELEASE SLAVES (Sync Release)
-                            // If I am a Master, I need to check if my Slaves are Momentary.
-                            // If they are, I must manually turn them OFF now.
                             if (cfg->incl_master_mask > 0) {
                                 for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
                                     for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
@@ -1214,18 +1248,11 @@ while(1) {
                                         if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
                                         sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
 
-                                        // DO WE LEAD THIS SLAVE?
+                                        // Do we lead this slave?
                                         if ((other_cfg->incl_mask & cfg->incl_master_mask) != 0) {
-                                            
-                                            // IS THE SLAVE ALSO MOMENTARY?
-                                            // If the slave is Toggle mode, we usually leave it ON (Latch behavior).
-                                            // But if it's Momentary, it must mirror our foot press.
+                                            // Is slave also momentary?
                                             if (!other_cfg->toggle_mode) {
-                                                
-                                                // Send Slave Note Off
                                                 send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
-                                                
-                                                // Force LED OFF
                                                 sw_toggled_on[b_scan][s_scan] = false;
                                             }
                                         }
@@ -1241,11 +1268,9 @@ while(1) {
             // === LONG PRESS CHECK ===
             if(button_state[i] && !lp_triggered[i] && (now_ms - press_start[i] > LONG_PRESS_MS)) {
                 sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[dev_cfg.current_bank].switches[i];
-                // Disable LP if Cycle Switch
                 if(cfg->lp_enabled == 1 && cfg->p_type != 250 && cfg->p_type != 251) { 
                     lp_triggered[i] = true; 
                     send_midi_msg(cfg->lp_type, cfg->lp_chan, cfg->lp_d1, 127); 
-                    
                     flash_end_time = now_ms + 50; 
                     flash_source_sw_idx = i; 
                 }
@@ -1254,12 +1279,11 @@ while(1) {
 
         // ============================================================
         //  SLOW LOOP (Executes every ~10ms)
-        //  Tasks: ADC Reading, LED Refresh, Housekeeping
         // ============================================================
         if (now_ms - last_slow_task_time > 10) {
             last_slow_task_time = now_ms;
 
-            // 1. Process Analog Inputs (Heavy tasks)
+            // 1. Process Analog Inputs
             process_expression_pedal();
             read_battery();
 
@@ -1273,7 +1297,6 @@ while(1) {
 
                 for(int k=0; k<LED_COUNT; k++) {
                     bool is_source = false;
-                    // Map physical switch to LED index (Snake/Circular logic)
                     if (flash_source_sw_idx != -1) {
                         int target_led = (flash_source_sw_idx < 4) ? flash_source_sw_idx + 1 : 12 - flash_source_sw_idx;
                         if (k == target_led) is_source = true;
@@ -1290,8 +1313,6 @@ while(1) {
             }
         }
 
-        // Yield to Watchdog/Other Tasks for 1 tick (approx 1ms if CONFIG_FREERTOS_HZ=1000)
-        // Force at least 1 tick delay (prevents WDT crash on 100Hz systems)
         const TickType_t delay = pdMS_TO_TICKS(1);
         vTaskDelay(delay == 0 ? 1 : delay);
     }
