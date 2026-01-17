@@ -104,16 +104,28 @@ typedef struct {
 } exp_cfg_t;
 
 typedef struct { 
+    // --- MIDI DATA ---
     uint8_t p_type; uint8_t p_chan; uint8_t p_d1; 
     uint8_t lp_type; uint8_t lp_chan; uint8_t lp_d1; 
     uint8_t l_type; uint8_t l_chan; uint8_t l_d1; 
+    
+    // --- PER-ACTION GROUPING ---
+    // Short Press (Standard)
+    uint8_t p_excl;   
+    uint8_t p_master; 
+
+    // Long Press
+    uint8_t lp_excl; 
+    uint8_t lp_master;
+
+    // Release / Toggle Off
+    uint8_t l_excl;
+    uint8_t l_master;
+
+    // --- GLOBAL SETTINGS ---
+    uint8_t incl_mask;   // Membership: Groups I belong to (Slave ID)
     uint8_t lp_enabled; 
     uint8_t toggle_mode; 
-    
-    // --- GROUPING VARIABLES ---
-    uint8_t excl_mask;        // Groups 1-8 I belong to (Exclusive/XOR)
-    uint8_t incl_mask;        // Groups 1-8 I belong to (Inclusive/Scene)
-    uint8_t incl_master_mask; // Groups 1-8 I AM THE LEADER OF
 } sw_cfg_t;
 
 typedef struct { sw_cfg_t switches[SWITCH_COUNT]; } bank_t;
@@ -686,11 +698,13 @@ esp_err_t get_page(httpd_req_t *req) { return httpd_resp_sendstr(req, INDEX_HTML
 
 esp_err_t get_json(httpd_req_t *req) {
     cJSON *root = cJSON_CreateObject();
+    
+    // Global Configs
     cJSON_AddBoolToObject(root, "cyc_rev", (dev_cfg.sw6_cycle_rev == 1)); 
     cJSON_AddBoolToObject(root, "cyc_fwd", (dev_cfg.sw7_cycle_fwd == 1)); 
     cJSON_AddNumberToObject(root, "brightness", dev_cfg.global_brightness);
     
-    // ADDED: Output Expression Config
+    // Output Expression Config
     cJSON *exp = cJSON_CreateObject();
     cJSON_AddNumberToObject(exp, "chan", dev_cfg.exp_pedal.chan);
     cJSON_AddNumberToObject(exp, "cc", dev_cfg.exp_pedal.cc);
@@ -698,26 +712,61 @@ esp_err_t get_json(httpd_req_t *req) {
     cJSON_AddNumberToObject(exp, "max", dev_cfg.exp_pedal.max);
     cJSON_AddItemToObject(root, "exp", exp);
 
-    cJSON *wifi = cJSON_CreateObject(); cJSON_AddStringToObject(wifi, "ssid", w_cfg.ssid); cJSON_AddStringToObject(wifi, "pass", w_cfg.pass); cJSON_AddItemToObject(root, "wifi", wifi);
+    // WiFi Config
+    cJSON *wifi = cJSON_CreateObject(); 
+    cJSON_AddStringToObject(wifi, "ssid", w_cfg.ssid); 
+    cJSON_AddStringToObject(wifi, "pass", w_cfg.pass); 
+    cJSON_AddItemToObject(root, "wifi", wifi);
+    
+    // Banks & Switches
     cJSON *banks_arr = cJSON_CreateArray();
     for(int b=0; b<BANK_COUNT; b++) {
-        cJSON *bank_obj = cJSON_CreateObject(); cJSON *sw_arr = cJSON_CreateArray();
+        cJSON *bank_obj = cJSON_CreateObject(); 
+        cJSON *sw_arr = cJSON_CreateArray();
+        
         for(int i=0; i<SWITCH_COUNT; i++) {
-            cJSON *item = cJSON_CreateObject(); sw_cfg_t *sw = (sw_cfg_t*)&dev_cfg.banks[b].switches[i];
-            int p[] = {sw->p_type, sw->p_chan, sw->p_d1}; int p2[] = {sw->lp_type, sw->lp_chan, sw->lp_d1}; int p3[] = {sw->l_type, sw->l_chan, sw->l_d1};
+            cJSON *item = cJSON_CreateObject(); 
+            sw_cfg_t *sw = (sw_cfg_t*)&dev_cfg.banks[b].switches[i];
+            
+            // Arrays for MIDI Data
+            int p[] = {sw->p_type, sw->p_chan, sw->p_d1}; 
+            int p2[] = {sw->lp_type, sw->lp_chan, sw->lp_d1}; 
+            int p3[] = {sw->l_type, sw->l_chan, sw->l_d1};
             
             cJSON_AddItemToObject(item, "p", cJSON_CreateIntArray(p, 3)); 
             cJSON_AddItemToObject(item, "lp", cJSON_CreateIntArray(p2, 3)); 
             cJSON_AddItemToObject(item, "l", cJSON_CreateIntArray(p3, 3)); 
+            
+            // Standard Configs
             cJSON_AddBoolToObject(item, "lp_en", (sw->lp_enabled == 1)); 
             cJSON_AddBoolToObject(item, "tog", (sw->toggle_mode == 1)); 
-            cJSON_AddNumberToObject(item, "excl", sw->excl_mask);
+            
+            // === NEW PER-ACTION GROUPING KEYS ===
+            cJSON_AddNumberToObject(item, "pe", sw->p_excl);       // Press Excl
+            cJSON_AddNumberToObject(item, "pm", sw->p_master);     // Press Master
+            
+            cJSON_AddNumberToObject(item, "lpe", sw->lp_excl);     // LP Excl
+            cJSON_AddNumberToObject(item, "lpm", sw->lp_master);   // LP Master
+            
+            cJSON_AddNumberToObject(item, "le", sw->l_excl);       // Release Excl
+            cJSON_AddNumberToObject(item, "lm", sw->l_master);     // Release Master
+            
+            // Global Membership (Slave ID)
             cJSON_AddNumberToObject(item, "incl", sw->incl_mask);
-            cJSON_AddNumberToObject(item, "im", sw->incl_master_mask);
             
             cJSON_AddItemToArray(sw_arr, item);
-        } cJSON_AddItemToObject(bank_obj, "switches", sw_arr); cJSON_AddItemToArray(banks_arr, bank_obj);
-    } cJSON_AddItemToObject(root, "banks", banks_arr); char *out = cJSON_PrintUnformatted(root); httpd_resp_set_type(req, "application/json"); httpd_resp_sendstr(req, out); free(out); cJSON_Delete(root); return ESP_OK;
+        } 
+        cJSON_AddItemToObject(bank_obj, "switches", sw_arr); 
+        cJSON_AddItemToArray(banks_arr, bank_obj);
+    } 
+    cJSON_AddItemToObject(root, "banks", banks_arr); 
+    
+    char *out = cJSON_PrintUnformatted(root); 
+    httpd_resp_set_type(req, "application/json"); 
+    httpd_resp_sendstr(req, out); 
+    free(out); 
+    cJSON_Delete(root); 
+    return ESP_OK;
 }
 esp_err_t post_set_bank(httpd_req_t *req) { 
     char buf[10]; 
@@ -803,6 +852,7 @@ esp_err_t get_wifi_scan(httpd_req_t *req) {
 esp_err_t post_save(httpd_req_t *req) {
     char *buf = malloc(req->content_len + 1);
     if (!buf) return ESP_FAIL;
+    
     size_t received = 0;
     while (received < req->content_len) {
         int ret = httpd_req_recv(req, buf + received, req->content_len - received);
@@ -810,16 +860,20 @@ esp_err_t post_save(httpd_req_t *req) {
         received += ret;
     }
     buf[received] = '\0'; 
+    
     cJSON *root = cJSON_Parse(buf);
     if (root) {
+        // Global Parsers
         cJSON *crev = cJSON_GetObjectItem(root, "cyc_rev"); 
         if(crev) dev_cfg.sw6_cycle_rev = cJSON_IsTrue(crev) ? 1 : 0; 
+        
         cJSON *cfwd = cJSON_GetObjectItem(root, "cyc_fwd"); 
         if(cfwd) dev_cfg.sw7_cycle_fwd = cJSON_IsTrue(cfwd) ? 1 : 0; 
+        
         cJSON *bri = cJSON_GetObjectItem(root, "brightness"); 
         if (bri) dev_cfg.global_brightness = bri->valueint;
         
-        // ADDED: Parse Expression Settings
+        // Parse Expression Settings
         cJSON *exp = cJSON_GetObjectItem(root, "exp");
         if(exp) {
             cJSON *ch = cJSON_GetObjectItem(exp, "chan");
@@ -835,6 +889,7 @@ esp_err_t post_save(httpd_req_t *req) {
             if(mx) dev_cfg.exp_pedal.max = mx->valueint;
         }
 
+        // Parse Banks
         cJSON *banks = cJSON_GetObjectItem(root, "banks");
         if(banks) {
             for(int b=0; b<BANK_COUNT; b++) {
@@ -844,23 +899,43 @@ esp_err_t post_save(httpd_req_t *req) {
                     for(int i=0; i<SWITCH_COUNT; i++) {
                         cJSON *it = cJSON_GetArrayItem(sws, i); 
                         sw_cfg_t *s = (sw_cfg_t*)&dev_cfg.banks[b].switches[i];
+                        
+                        // MIDI Arrays
                         cJSON *p = cJSON_GetObjectItem(it, "p"); 
                         cJSON *lp = cJSON_GetObjectItem(it, "lp"); 
                         cJSON *l = cJSON_GetObjectItem(it, "l");
+                        
+                        // Basic Configs
                         cJSON *lpen = cJSON_GetObjectItem(it, "lp_en");
                         cJSON *tog = cJSON_GetObjectItem(it, "tog"); 
-                        cJSON *excl = cJSON_GetObjectItem(it, "excl");
                         cJSON *incl = cJSON_GetObjectItem(it, "incl");
-                        cJSON *im = cJSON_GetObjectItem(it, "im");
+
+                        // === NEW PER-ACTION GROUPING KEYS ===
+                        cJSON *pe = cJSON_GetObjectItem(it, "pe");
+                        cJSON *pm = cJSON_GetObjectItem(it, "pm");
                         
+                        cJSON *lpe = cJSON_GetObjectItem(it, "lpe");
+                        cJSON *lpm = cJSON_GetObjectItem(it, "lpm");
+                        
+                        cJSON *le = cJSON_GetObjectItem(it, "le");
+                        cJSON *lm = cJSON_GetObjectItem(it, "lm");
+
+                        // Assignments
                         if(p) { s->p_type=cJSON_GetArrayItem(p,0)->valueint; s->p_chan=cJSON_GetArrayItem(p,1)->valueint; s->p_d1=cJSON_GetArrayItem(p,2)->valueint; }
                         if(lp) { s->lp_type=cJSON_GetArrayItem(lp,0)->valueint; s->lp_chan=cJSON_GetArrayItem(lp,1)->valueint; s->lp_d1=cJSON_GetArrayItem(lp,2)->valueint; }
                         if(l) { s->l_type=cJSON_GetArrayItem(l,0)->valueint; s->l_chan=cJSON_GetArrayItem(l,1)->valueint; s->l_d1=cJSON_GetArrayItem(l,2)->valueint; }
+                        
                         if(lpen) { s->lp_enabled = cJSON_IsTrue(lpen) ? 1 : 0; }
                         if(tog) { s->toggle_mode = cJSON_IsTrue(tog) ? 1 : 0; } 
-                        if(excl) { s->excl_mask = excl->valueint; }
                         if(incl) { s->incl_mask = incl->valueint; }
-                        if(im) { s->incl_master_mask = im->valueint; }
+
+                        // New Group Assignments
+                        if(pe)  s->p_excl    = pe->valueint;
+                        if(pm)  s->p_master  = pm->valueint;
+                        if(lpe) s->lp_excl   = lpe->valueint;
+                        if(lpm) s->lp_master = lpm->valueint;
+                        if(le)  s->l_excl    = le->valueint;
+                        if(lm)  s->l_master  = lm->valueint;
                     }
                 }
             }
@@ -869,7 +944,9 @@ esp_err_t post_save(httpd_req_t *req) {
         uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0);
         httpd_resp_sendstr(req, "OK");
     }
-    free(buf); httpd_resp_set_hdr(req, "Connection", "close"); return ESP_OK;
+    free(buf); 
+    httpd_resp_set_hdr(req, "Connection", "close"); 
+    return ESP_OK;
 }
 
 void app_main(void) {
@@ -992,9 +1069,11 @@ void app_main(void) {
     // --- RECURSIVE TRIGGER FUNCTION ---
 // Triggers a switch ON, then finds and triggers any slaves (Chain Reaction).
 // Also handles Exclusive conflicts for every switch in the chain.
-void trigger_switch_on(uint8_t bank, uint8_t idx) {
+// --- RECURSIVE TRIGGER FUNCTION (Updated) ---
+// Now accepts specific masks to allow per-action grouping
+void trigger_switch_on(uint8_t bank, uint8_t idx, uint8_t active_excl, uint8_t active_master) {
     
-    // 1. Safety Check: If already ON, stop (Prevents infinite loops)
+    // 1. Safety Check
     if (sw_toggled_on[bank][idx]) return;
 
     // 2. Turn This Switch ON
@@ -1004,17 +1083,16 @@ void trigger_switch_on(uint8_t bank, uint8_t idx) {
     // Send MIDI "Press" Message
     send_midi_msg(cfg->p_type, cfg->p_chan, cfg->p_d1, 127);
 
-    // 3. Handle EXCLUSIVE Conflicts (Kill others)
-    // "If I am part of an Exclusive group, turn off my rivals"
-    if (cfg->excl_mask > 0) {
+    // 3. Handle EXCLUSIVE Conflicts (Using custom mask)
+    if (active_excl > 0) {
         for (int b = 0; b < BANK_COUNT; b++) {
             for (int s = 0; s < SWITCH_COUNT; s++) {
-                if (b == bank && s == idx) continue; // Skip self
+                if (b == bank && s == idx) continue; 
                 
                 sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
-                if ((other->excl_mask & cfg->excl_mask) != 0) {
+                // Compare My Active Mask vs Their Base Press Mask (Identity)
+                if ((other->p_excl & active_excl) != 0) {
                     if (sw_toggled_on[b][s]) {
-                        // Turn Rival OFF
                         sw_toggled_on[b][s] = false;
                         send_midi_msg(other->l_type, other->l_chan, other->l_d1, 0);
                     }
@@ -1023,21 +1101,18 @@ void trigger_switch_on(uint8_t bank, uint8_t idx) {
         }
     }
 
-    // 4. Handle INCLUSIVE Cascades (Trigger Slaves)
-    // "If I am a Master, find my slaves and trigger them too"
-    if (cfg->incl_master_mask > 0) {
+    // 4. Handle INCLUSIVE Cascades (Using custom mask)
+    if (active_master > 0) {
         for (int b = 0; b < BANK_COUNT; b++) {
             for (int s = 0; s < SWITCH_COUNT; s++) {
-                if (b == bank && s == idx) continue; // Skip self
+                if (b == bank && s == idx) continue; 
                 
                 sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
                 
                 // Do I command this switch?
-                if ((other->incl_mask & cfg->incl_master_mask) != 0) {
-                    // RECURSIVE CALL: Trigger the slave!
-                    // This will start the process again for the slave, 
-                    // allowing IT to trigger ITS own slaves (C->A->B)
-                    trigger_switch_on(b, s);
+                if ((other->incl_mask & active_master) != 0) {
+                    // Trigger the slave using ITS OWN default Press masks (Chain reaction)
+                    trigger_switch_on(b, s, other->p_excl, other->p_master);
                 }
             }
         }
@@ -1058,9 +1133,6 @@ void midi_task(void *pv) {
     bool lp_triggered[SWITCH_COUNT]; 
     uint32_t last_debounce_time[SWITCH_COUNT];
     
-    // NOTE: sw_toggled_on is now a GLOBAL variable at the top of main.c
-    // Do not define it here locally!
-    
     // Initialize Arrays
     for(int b=0; b<BANK_COUNT; b++) {
         for(int i=0; i<SWITCH_COUNT; i++) { 
@@ -1069,17 +1141,16 @@ void midi_task(void *pv) {
             press_start[i] = 0; 
             lp_triggered[i] = false; 
             last_debounce_time[i] = 0; 
-            // sw_toggled_on[b][i] = false; // Already handled by global init
         }
     }
     
     // Timers & Triggers
     uint32_t combo_timer = 0;
     bool combo_triggered = false;
-    uint32_t last_slow_task_time = 0; // For throttling ADC/LEDs
+    uint32_t last_slow_task_time = 0; 
     
     // LED Flash Logic
-    uint32_t flash_end_time = 0;      // When the flash should stop
+    uint32_t flash_end_time = 0;      
     int flash_source_sw_idx = -1; 
 
     while(1) {
@@ -1149,80 +1220,62 @@ void midi_task(void *pv) {
 
                     bool is_cycling = false;
                     
-                    // A. Check for Bank Switching / Special Types
-                    // 250=Rev, 251=Fwd, 252=B1, 253=B2, 254=B3, 255=B4
+                    // A. Check for Bank Cycle Types
                     if (cfg->p_type >= 250 && cfg->p_type <= 255) { 
-                        
                         if (cfg->p_type == 250) { 
-                            // Previous Bank
                             dev_cfg.current_bank = (dev_cfg.current_bank - 1 + BANK_COUNT) % BANK_COUNT; 
                         } 
                         else if (cfg->p_type == 251) { 
-                            // Next Bank
                             dev_cfg.current_bank = (dev_cfg.current_bank + 1) % BANK_COUNT; 
                         }
                         else {
-                            // Direct Bank Select (252->Bank0, 253->Bank1, etc.)
                             uint8_t target_bank = cfg->p_type - 252;
                             if (target_bank < BANK_COUNT) {
                                 dev_cfg.current_bank = target_bank;
                             }
                         }
-
-                        // Save the new bank state
-                        uint8_t trigger = 1; 
-                        xQueueSend(save_queue, &trigger, 0); 
-                        
-                        // Mark as cycling so we skip standard toggle/momentary logic
+                        uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0); 
                         is_cycling = true; 
                     }
 
                     // B. Standard Logic (Using Recursive Trigger)
                     if (!is_cycling) { 
-                        
                         // --- TOGGLE MODE ---
                         if (cfg->toggle_mode) {
                             if (!sw_toggled_on[dev_cfg.current_bank][i]) {
-                                // CASE: Turning ON -> Use Recursive Trigger
-                                trigger_switch_on(dev_cfg.current_bank, i);
+                                // CASE: Turning ON -> Use 'p' Masks
+                                trigger_switch_on(dev_cfg.current_bank, i, cfg->p_excl, cfg->p_master);
                             } else {
-                                // CASE: Turning OFF -> Manual Off
+                                // CASE: Turning OFF -> Use 'l' (Release) Masks
                                 sw_toggled_on[dev_cfg.current_bank][i] = false;
                                 send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0);
                                 
-                                // === NEW FIX: Turn OFF Momentary Slaves ===
-                                // If I am a Master turning OFF, check for any Momentary slaves 
-                                // that are currently latching and force them OFF.
-                                if (cfg->incl_master_mask > 0) {
+                                // === SLAVE KILL SWITCH (Using Release Master Mask) ===
+                                if (cfg->l_master > 0) {
                                     for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
                                         for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
                                             if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
                                             sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
 
-                                            if ((other_cfg->incl_mask & cfg->incl_master_mask) != 0) {
-                                                // If slave is Momentary and currently ON, kill it
-                                                if (!other_cfg->toggle_mode) {
-                                                    if (sw_toggled_on[b_scan][s_scan]) {
-                                                        send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
-                                                        sw_toggled_on[b_scan][s_scan] = false;
-                                                    }
+                                            if ((other_cfg->incl_mask & cfg->l_master) != 0) {
+                                                // If slave is ON, force it OFF
+                                                if (sw_toggled_on[b_scan][s_scan]) {
+                                                    send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
+                                                    sw_toggled_on[b_scan][s_scan] = false;
                                                 }
                                             }
                                         }
                                     }
                                 }
-                                // ==========================================
                             }
                         } 
-                        
                         // --- MOMENTARY MODE ---
                         else {
-                            // Ensure state is clear so trigger_switch_on accepts the input
                             if (sw_toggled_on[dev_cfg.current_bank][i]) {
                                 sw_toggled_on[dev_cfg.current_bank][i] = false;
                             }
-                            // Trigger ON (and ripple to slaves)
-                            trigger_switch_on(dev_cfg.current_bank, i);
+                            // Trigger ON using 'p' Masks
+                            trigger_switch_on(dev_cfg.current_bank, i, cfg->p_excl, cfg->p_master);
                         }
                     }
                     press_start[i] = now_ms; 
@@ -1230,28 +1283,24 @@ void midi_task(void *pv) {
 
                 } else { 
                 // === RELEASE EVENT ===
-                    if(cfg->p_type != 250 && cfg->p_type != 251) {
+                    if(cfg->p_type < 250) { 
                         
                         // Handle Momentary Release
                         if (!cfg->toggle_mode) { 
                             // 1. Send MASTER Note Off
                             send_midi_msg(cfg->l_type, cfg->l_chan, cfg->l_d1, 0); 
-                            
-                            // FIX: Turn OFF the Master LED explicitly
                             sw_toggled_on[dev_cfg.current_bank][i] = false;
 
-                            // 2. RELEASE SLAVES (Sync Release)
-                            if (cfg->incl_master_mask > 0) {
+                            // 2. RELEASE SLAVES (Using Release Master Mask)
+                            if (cfg->l_master > 0) {
                                 for (int b_scan = 0; b_scan < BANK_COUNT; b_scan++) {
                                     for (int s_scan = 0; s_scan < SWITCH_COUNT; s_scan++) {
-                                        
                                         if (b_scan == dev_cfg.current_bank && s_scan == i) continue; 
                                         sw_cfg_t *other_cfg = (sw_cfg_t*)&dev_cfg.banks[b_scan].switches[s_scan];
 
-                                        // Do we lead this slave?
-                                        if ((other_cfg->incl_mask & cfg->incl_master_mask) != 0) {
-                                            // Is slave also momentary?
-                                            if (!other_cfg->toggle_mode) {
+                                        if ((other_cfg->incl_mask & cfg->l_master) != 0) {
+                                            // Force Slave OFF
+                                            if (sw_toggled_on[b_scan][s_scan]) {
                                                 send_midi_msg(other_cfg->l_type, other_cfg->l_chan, other_cfg->l_d1, 0);
                                                 sw_toggled_on[b_scan][s_scan] = false;
                                             }
@@ -1268,9 +1317,44 @@ void midi_task(void *pv) {
             // === LONG PRESS CHECK ===
             if(button_state[i] && !lp_triggered[i] && (now_ms - press_start[i] > LONG_PRESS_MS)) {
                 sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[dev_cfg.current_bank].switches[i];
-                if(cfg->lp_enabled == 1 && cfg->p_type != 250 && cfg->p_type != 251) { 
+                if(cfg->lp_enabled == 1 && cfg->p_type < 250) { 
                     lp_triggered[i] = true; 
                     send_midi_msg(cfg->lp_type, cfg->lp_chan, cfg->lp_d1, 127); 
+
+                    // --- LONG PRESS GROUPING LOGIC ---
+                    // 1. LP Exclusive (Kill Rivals)
+                    if (cfg->lp_excl > 0) {
+                         for (int b = 0; b < BANK_COUNT; b++) {
+                            for (int s = 0; s < SWITCH_COUNT; s++) {
+                                if (b == dev_cfg.current_bank && s == i) continue; 
+                                sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
+                                // Compare against rival's SHORT PRESS mask (Identity)
+                                if ((other->p_excl & cfg->lp_excl) != 0) {
+                                    if (sw_toggled_on[b][s]) {
+                                        sw_toggled_on[b][s] = false;
+                                        send_midi_msg(other->l_type, other->l_chan, other->l_d1, 0);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 2. LP Master (Trigger Slaves)
+                    if (cfg->lp_master > 0) {
+                        for (int b = 0; b < BANK_COUNT; b++) {
+                            for (int s = 0; s < SWITCH_COUNT; s++) {
+                                if (b == dev_cfg.current_bank && s == i) continue; 
+                                sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
+                                
+                                if ((other->incl_mask & cfg->lp_master) != 0) {
+                                    // Trigger the slave (using ITS standard Press masks)
+                                    trigger_switch_on(b, s, other->p_excl, other->p_master);
+                                }
+                            }
+                        }
+                    }
+                    // ---------------------------------
+                    
                     flash_end_time = now_ms + 50; 
                     flash_source_sw_idx = i; 
                 }
@@ -1278,18 +1362,15 @@ void midi_task(void *pv) {
         }
 
         // ============================================================
-        //  SLOW LOOP (Executes every ~10ms)
+        //  SLOW LOOP
         // ============================================================
         if (now_ms - last_slow_task_time > 10) {
             last_slow_task_time = now_ms;
-
-            // 1. Process Analog Inputs
             process_expression_pedal();
             read_battery();
 
-            // 2. LED Animation Handler
             if (now_ms < flash_end_time) {
-                // --- FLASH STATE ---
+                // Flash State
                 uint8_t fw = dev_cfg.global_brightness / 3; 
                 uint8_t br = BANK_COLORS[dev_cfg.current_bank][0] * dev_cfg.global_brightness / 255;
                 uint8_t bg = BANK_COLORS[dev_cfg.current_bank][1] * dev_cfg.global_brightness / 255;
@@ -1307,7 +1388,7 @@ void midi_task(void *pv) {
                 refresh_leds();
             } 
             else {
-                // --- STANDARD STATE ---
+                // Standard State
                 flash_source_sw_idx = -1; 
                 update_status_leds(g_bat_voltage, dev_cfg.current_bank, sw_toggled_on[dev_cfg.current_bank], button_state);
             }
