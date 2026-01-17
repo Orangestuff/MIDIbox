@@ -122,8 +122,28 @@ const char* INDEX_HTML = R"=====(
     let curBank = 0;
     let liveExpVal = 0; 
 
-    function genTypes(sel) {
-        return Object.keys(types).map(k => `<option value='${k}' ${sel == k ? 'selected' : ''}>${types[k]}</option>`).join('');
+// Helper to generate the dropdown options
+    function genTypes(val) {
+        // 0=None, 144=NoteOn, 128=NoteOff, 176=CC, 192=PC
+        // 251=Next, 250=Prev, 252=B1, 253=B2, 254=B3, 255=B4
+        const opts = [
+            {v:0, t:"None"},
+            {v:144, t:"Note On"},
+            {v:128, t:"Note Off"},
+            {v:176, t:"CC"},
+            {v:192, t:"PC"},
+            {v:251, t:"Bank Fwd"},
+            {v:250, t:"Bank Rev"},
+            {v:252, t:"Bank 1"},
+            {v:253, t:"Bank 2"},
+            {v:254, t:"Bank 3"},
+            {v:255, t:"Bank 4"}
+        ];
+        let h = "";
+        opts.forEach(o => {
+            h += `<option value='${o.v}' ${val==o.v?"selected":""}>${o.t}</option>`;
+        });
+        return h;
     }
 
     // --- BITMASK HELPERS ---
