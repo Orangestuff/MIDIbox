@@ -233,50 +233,63 @@ uint8_t apply_curve(float normalized, uint8_t type) {
     return (uint8_t)(val * 127.0f);
 }
 
+// Noise threshold (Adjust 10-30 if still jittery)
+#define EXP_HYSTERESIS 25
+
 void process_expression_pedal() {
-    // 1. Get Config for CURRENT BANK
+    // 1. Get Config
     volatile exp_cfg_t *exp = &dev_cfg.banks[dev_cfg.current_bank].exp;
 
-    // 2. Read ADC (Raw)
-    int raw = 0;
-    // FIX: Replaced ADC1_CHANNEL_X with EX_PEDAL_CHANNEL
-    adc_oneshot_read(adc_handle, EX_PEDAL_CHANNEL, &raw);
+    // 2. Read ADC (Oversampling)
+    uint32_t sum = 0;
+    int sample = 0;
+    for(int i=0; i<4; i++) {
+        adc_oneshot_read(adc_handle, EX_PEDAL_CHANNEL, &sample);
+        sum += sample;
+    }
+    int raw = sum / 4;
 
-    // Simple filter (Exponential Moving Average)
+    // 3. Hysteresis
+    static int stable_raw = 0;
+    if (raw > (stable_raw + EXP_HYSTERESIS)) {
+        stable_raw = raw - EXP_HYSTERESIS; 
+    } 
+    else if (raw < (stable_raw - EXP_HYSTERESIS)) {
+        stable_raw = raw + EXP_HYSTERESIS; 
+    }
+
+    // 4. Smoothing
     static float smooth_raw = 0;
-    smooth_raw = (smooth_raw * 0.8) + (raw * 0.2);
+    smooth_raw = (smooth_raw * 0.90f) + ((float)stable_raw * 0.10f);
     int current_val = (int)smooth_raw;
 
-    // 3. Normalize (0.0 to 1.0) using Calibration
+    // --- FIX: Update UI Global continuously (Outside the MIDI logic) ---
+    // This ensures you see the REAL raw value even if you go past Min/Max
+    g_exp_raw_val = current_val; 
+    // ------------------------------------------------------------------
+
+    // 5. Normalize
     float norm = 0.0f;
     if (exp->max > exp->min) {
         norm = (float)(current_val - exp->min) / (float)(exp->max - exp->min);
     } else {
-        // Handle reverse polarity
         norm = (float)(exp->min - current_val) / (float)(exp->min - exp->max);
     }
     
-    // Clamp
     if (norm < 0.0f) norm = 0.0f;
     if (norm > 1.0f) norm = 1.0f;
 
-    // 4. Apply Curve & Scale to MIDI (0-127)
+    // 6. Curve
     uint8_t midi_val = apply_curve(norm, exp->curve);
 
-    // 5. Send MIDI (Only if changed)
+    // 7. Send MIDI (Only if changed)
     static uint8_t last_exp_val = 255;
-    // We also need to track last_bank to force resend on bank change
     static uint8_t last_bank_idx = 255; 
 
     if (midi_val != last_exp_val || dev_cfg.current_bank != last_bank_idx) {
-        
-        send_midi_msg(176, exp->chan, exp->cc, midi_val); // CC Message
-        
+        send_midi_msg(176, exp->chan, exp->cc, midi_val); 
         last_exp_val = midi_val;
         last_bank_idx = dev_cfg.current_bank;
-        
-        // FIX: Update Live Status for Web UI so calibration works
-        g_exp_raw_val = current_val; 
     }
 }
 
