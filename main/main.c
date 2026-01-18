@@ -37,7 +37,7 @@ static const char *TAG = "MIDI_PEDAL";
 // --- CONFIGURATION ---
 #define SWITCH_COUNT 8
 #define BANK_COUNT 4
-#define LONG_PRESS_MS 2000
+#define LONG_PRESS_MS 1200
 #define MIDI_NOTE_OFF 128
 #define MIDI_NOTE_ON  144
 #define MIDI_CC       176
@@ -87,65 +87,51 @@ static adc_oneshot_unit_handle_t adc_handle = NULL;
 static float smoothed_bat = 0.0f;
 
 // --- Expression Pedal Globals ---
-static int pedal_readings[EX_SMOOTH_SIZE];
-static int pedal_index = 0;
-static long pedal_total = 0;
-static int last_pedal_midi = -1;
 volatile int g_exp_raw_val = 0; // GLOBAL FOR UI CALIBRATION
 
 typedef struct { char ssid[32]; char pass[64]; } wifi_cfg_t;
 
-// Struct for Expression Settings
+// --- STRUCTS ---
+
 typedef struct {
-    uint8_t chan; // 0-15
-    uint8_t cc;   // 0-127
-    uint16_t min; // 0-4095
-    uint16_t max; // 0-4095
+    uint8_t chan;
+    uint8_t cc;
+    uint16_t min;   // Calibration Min (ADC Value)
+    uint16_t max;   // Calibration Max (ADC Value)
+    uint8_t curve;  // 0=Linear, 1=Exp (Slow), 2=Log (Fast)
 } exp_cfg_t;
 
 typedef struct { 
-    // --- MIDI DATA ---
-    uint8_t p_type; uint8_t p_chan; uint8_t p_d1; 
+    uint8_t p_type; uint8_t p_chan; uint8_t p_d1; uint8_t p_edge;
     uint8_t lp_type; uint8_t lp_chan; uint8_t lp_d1; 
     uint8_t l_type; uint8_t l_chan; uint8_t l_d1; 
     
-    // --- PER-ACTION GROUPING ---
-    // Short Press (Standard)
-    uint8_t p_excl;   
-    uint8_t p_master; 
+    uint8_t p_excl; uint8_t p_master; 
+    uint8_t lp_excl; uint8_t lp_master;
+    uint8_t l_excl; uint8_t l_master;
 
-    uint8_t p_edge; // NEW: 0=Press (Default), 1=Release
-
-    // Long Press
-    uint8_t lp_excl; 
-    uint8_t lp_master;
-
-    // Release / Toggle Off
-    uint8_t l_excl;
-    uint8_t l_master;
-
-    // --- GLOBAL SETTINGS ---
-    uint8_t incl_mask;   // Membership: Groups I belong to (Slave ID)
+    uint8_t incl_mask; 
     uint8_t lp_enabled; 
     uint8_t toggle_mode; 
 } sw_cfg_t;
 
-typedef struct { sw_cfg_t switches[SWITCH_COUNT]; } bank_t;
+typedef struct {
+    sw_cfg_t switches[SWITCH_COUNT];
+    exp_cfg_t exp; // Expression settings are now PER BANK
+} bank_cfg_t;
 
-typedef struct { 
-    bank_t banks[BANK_COUNT]; 
-    uint8_t current_bank; 
-    uint8_t sw6_cycle_rev; // Legacy Name (Now Switch 1)
-    uint8_t sw7_cycle_fwd; // Legacy Name (Now Switch 2)
+typedef struct {
+    uint8_t current_bank;
     uint8_t global_brightness;
-    exp_cfg_t exp_pedal; 
-} device_cfg_t;
+    uint8_t sw6_cycle_rev;
+    uint8_t sw7_cycle_fwd;
+    bank_cfg_t banks[BANK_COUNT];
+} device_cfg_t; // Corrected Name
 
 wifi_cfg_t w_cfg;
 volatile device_cfg_t dev_cfg; 
 static QueueHandle_t save_queue = NULL;
 static EventGroupHandle_t s_wifi_event_group;
-//static uint32_t flash_timer = 0;
 static httpd_handle_t srv = NULL;
 static bool is_wifi_on = false;
 
@@ -212,10 +198,6 @@ void init_expression_pedal() {
             .atten = ADC_ATTEN_DB_12,    
         };
         adc_oneshot_config_channel(adc_handle, EX_PEDAL_CHANNEL, &config);
-
-        for (int i = 0; i < EX_SMOOTH_SIZE; i++) {
-            pedal_readings[i] = 0;
-        }
     }
 }
 
@@ -231,66 +213,70 @@ void read_battery() {
     }
 }
 
-long map_val(long x, long in_min, long in_max, long out_min, long out_max) {
-    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
+// Helper for Curve Math
+uint8_t apply_curve(float normalized, uint8_t type) {
+    float val = normalized;
+    if (val < 0.0f) val = 0.0f;
+    if (val > 1.0f) val = 1.0f;
 
-long constrain_val(long x, long a, long b) {
-    if (x < a) return a;
-    if (x > b) return b;
-    return x;
+    switch(type) {
+        case 1: // Exp (Slow Start / Volume Swell) -> y = x^2
+            val = val * val;
+            break;
+        case 2: // Log (Fast Start) -> y = sqrt(x)
+            val = sqrtf(val); // Requires #include <math.h>
+            break;
+        case 0: // Linear -> y = x
+        default:
+            break;
+    }
+    return (uint8_t)(val * 127.0f);
 }
-
-// Add this variable near your other globals or just rely on the static one inside the function
-// (I've made it static inside the function below so it's self-contained)
 
 void process_expression_pedal() {
-    if (adc_handle == NULL) return;
+    // 1. Get Config for CURRENT BANK
+    volatile exp_cfg_t *exp = &dev_cfg.banks[dev_cfg.current_bank].exp;
+
+    // 2. Read ADC (Raw)
+    int raw = 0;
+    // FIX: Replaced ADC1_CHANNEL_X with EX_PEDAL_CHANNEL
+    adc_oneshot_read(adc_handle, EX_PEDAL_CHANNEL, &raw);
+
+    // Simple filter (Exponential Moving Average)
+    static float smooth_raw = 0;
+    smooth_raw = (smooth_raw * 0.8) + (raw * 0.2);
+    int current_val = (int)smooth_raw;
+
+    // 3. Normalize (0.0 to 1.0) using Calibration
+    float norm = 0.0f;
+    if (exp->max > exp->min) {
+        norm = (float)(current_val - exp->min) / (float)(exp->max - exp->min);
+    } else {
+        // Handle reverse polarity
+        norm = (float)(exp->min - current_val) / (float)(exp->min - exp->max);
+    }
     
-    // Static variable to remember the last "significant" raw value
-    static int last_stable_raw = 0; 
-    
-    int raw_val;
-    if (adc_oneshot_read(adc_handle, EX_PEDAL_CHANNEL, &raw_val) == ESP_OK) {
+    // Clamp
+    if (norm < 0.0f) norm = 0.0f;
+    if (norm > 1.0f) norm = 1.0f;
+
+    // 4. Apply Curve & Scale to MIDI (0-127)
+    uint8_t midi_val = apply_curve(norm, exp->curve);
+
+    // 5. Send MIDI (Only if changed)
+    static uint8_t last_exp_val = 255;
+    // We also need to track last_bank to force resend on bank change
+    static uint8_t last_bank_idx = 255; 
+
+    if (midi_val != last_exp_val || dev_cfg.current_bank != last_bank_idx) {
         
-        // UPDATE GLOBAL FOR UI
-        g_exp_raw_val = raw_val;
-
-        // 1. Smoothing (Moving Average)
-        pedal_total = pedal_total - pedal_readings[pedal_index];
-        pedal_readings[pedal_index] = raw_val;
-        pedal_total = pedal_total + pedal_readings[pedal_index];
-        pedal_index = (pedal_index + 1) % EX_SMOOTH_SIZE;
-        int average = pedal_total / EX_SMOOTH_SIZE;
-
-        // 2. HYSTERESIS / JITTER FILTER
-        // We calculate the difference between the current average and the last used value.
-        // If the change is small (noise), we ignore it and DO NOT calculate a new MIDI value.
-        // Threshold: 12 is a good balance (approx 1/3 of a MIDI step)
-        int diff = abs(average - last_stable_raw);
+        send_midi_msg(176, exp->chan, exp->cc, midi_val); // CC Message
         
-        // We ALWAYS update if the value is very close to the min/max calibration 
-        // (This ensures you can definitely reach 0 and 127 despite the filter)
-        int min_cal = (dev_cfg.exp_pedal.min == 0) ? 100 : dev_cfg.exp_pedal.min;
-        int max_cal = (dev_cfg.exp_pedal.max == 0) ? 4000 : dev_cfg.exp_pedal.max;
+        last_exp_val = midi_val;
+        last_bank_idx = dev_cfg.current_bank;
         
-        bool near_limits = (average < min_cal + 20) || (average > max_cal - 20);
-
-        if (diff > 12 || near_limits) {
-            // Significant change detected -> Update our "Stable" value
-            last_stable_raw = average;
-
-            // 3. Mapping
-            int midi_val = map_val(average, min_cal, max_cal, 0, 127);
-            midi_val = constrain_val(midi_val, 0, 127);
-
-            // 4. Send (Only if the MIDI value actually changed)
-            if (midi_val != last_pedal_midi) {
-                uint8_t cc = (dev_cfg.exp_pedal.cc == 0) ? 11 : dev_cfg.exp_pedal.cc; 
-                send_midi_msg(MIDI_CC, dev_cfg.exp_pedal.chan, cc, midi_val); 
-                last_pedal_midi = midi_val;
-            }
-        }
+        // FIX: Update Live Status for Web UI so calibration works
+        g_exp_raw_val = current_val; 
     }
 }
 
@@ -369,7 +355,6 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         conn_params.max_int = 0x0C; // 15ms
         conn_params.latency = 0;
         conn_params.timeout = 400;  // 4s
-        // Note: The central (phone/PC) decides if it accepts this, but we MUST ask.
         esp_ble_gap_update_conn_params(&conn_params);
         ESP_LOGI(TAG, "BLE Connected");
     }
@@ -554,12 +539,6 @@ void set_pixel(int index, uint8_t r, uint8_t g, uint8_t b) {
 // Add this static buffer just above the function to remember the last state
 static uint8_t last_led_state[LED_COUNT][3];
 
-// Add this static spinlock at the top of your file (with other globals)
-static portMUX_TYPE rmt_lock = portMUX_INITIALIZER_UNLOCKED;
-
-// Remove the static spinlock (no longer needed)
-// static portMUX_TYPE rmt_lock = portMUX_INITIALIZER_UNLOCKED; <--- DELETE THIS
-
 void refresh_leds() {
     // --- 1. SMART CHECK ---
     if (memcmp(led_strip_pixels, last_led_state, sizeof(led_strip_pixels)) == 0) {
@@ -589,16 +568,7 @@ void refresh_leds() {
     }
     
     // --- 4. SEND DATA (SAFE MODE) ---
-    
-    // A. Force a clean Reset Line (Low) to clear any garbage on the wire
-    // We do this by temporarily disabling the RMT TX loop output if needed, 
-    // but a simple delay is usually enough if the line is idle.
     esp_rom_delay_us(60); 
-    
-    // B. Send the data
-    // We do NOT use taskENTER_CRITICAL here because rmt_write_items needs the OS.
-    // Instead, we trust the RMT hardware buffer. 
-    // The "Disco Glitch" usually happens because of "Ghost" writes or too frequent updates.
     rmt_write_items(RMT_CHANNEL_0, items, LED_COUNT * 24, true);
 }
 
@@ -628,7 +598,7 @@ void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *
         
         // --- CASE A: DIRECT BANK SWITCH (Navigation) ---
         // We want these to show the TARGET color, but DIMMED so they don't look "Active".
-        if (cfg->p_type >= 252 && cfg->p_type <= 255) {
+        if (cfg->p_type >= 252) {
             uint8_t target_b = cfg->p_type - 252;
             
             // Scaled down to 5% brightness
@@ -663,10 +633,10 @@ void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *
                 
                 // Ensure at least faint light if global brightness is high enough
                 if (global_br > 50 && r==0 && g==0 && b==0) {
-                     // Force minimum glow if color is non-black
-                     if (BANK_COLORS[current_bank][0] > 0) r = 1;
-                     if (BANK_COLORS[current_bank][1] > 0) g = 1;
-                     if (BANK_COLORS[current_bank][2] > 0) b = 1;
+                      // Force minimum glow if color is non-black
+                      if (BANK_COLORS[current_bank][0] > 0) r = 1;
+                      if (BANK_COLORS[current_bank][1] > 0) g = 1;
+                      if (BANK_COLORS[current_bank][2] > 0) b = 1;
                 }
             }
         }
@@ -700,37 +670,39 @@ esp_err_t get_page(httpd_req_t *req) { return httpd_resp_sendstr(req, INDEX_HTML
 
 esp_err_t get_json(httpd_req_t *req) {
     cJSON *root = cJSON_CreateObject();
-    
-    // Global Configs
     cJSON_AddBoolToObject(root, "cyc_rev", (dev_cfg.sw6_cycle_rev == 1)); 
     cJSON_AddBoolToObject(root, "cyc_fwd", (dev_cfg.sw7_cycle_fwd == 1)); 
     cJSON_AddNumberToObject(root, "brightness", dev_cfg.global_brightness);
     
-    // Output Expression Config
-    cJSON *exp = cJSON_CreateObject();
-    cJSON_AddNumberToObject(exp, "chan", dev_cfg.exp_pedal.chan);
-    cJSON_AddNumberToObject(exp, "cc", dev_cfg.exp_pedal.cc);
-    cJSON_AddNumberToObject(exp, "min", dev_cfg.exp_pedal.min);
-    cJSON_AddNumberToObject(exp, "max", dev_cfg.exp_pedal.max);
-    cJSON_AddItemToObject(root, "exp", exp);
-
-    // WiFi Config
+    // Output WiFi
     cJSON *wifi = cJSON_CreateObject(); 
     cJSON_AddStringToObject(wifi, "ssid", w_cfg.ssid); 
     cJSON_AddStringToObject(wifi, "pass", w_cfg.pass); 
     cJSON_AddItemToObject(root, "wifi", wifi);
     
-    // Banks & Switches
+    // Banks
     cJSON *banks_arr = cJSON_CreateArray();
     for(int b=0; b<BANK_COUNT; b++) {
         cJSON *bank_obj = cJSON_CreateObject(); 
-        cJSON *sw_arr = cJSON_CreateArray();
         
+        // --- NEW: Expression Per Bank ---
+        cJSON *exp_obj = cJSON_CreateObject();
+        volatile exp_cfg_t *e = &dev_cfg.banks[b].exp;
+        cJSON_AddNumberToObject(exp_obj, "ch", e->chan);
+        cJSON_AddNumberToObject(exp_obj, "cc", e->cc);
+        cJSON_AddNumberToObject(exp_obj, "min", e->min);
+        cJSON_AddNumberToObject(exp_obj, "max", e->max);
+        cJSON_AddNumberToObject(exp_obj, "crv", e->curve);
+        cJSON_AddItemToObject(bank_obj, "exp", exp_obj);
+        // --------------------------------
+
+        cJSON *sw_arr = cJSON_CreateArray();
         for(int i=0; i<SWITCH_COUNT; i++) {
+            // ... (Your existing switch JSON code) ...
             cJSON *item = cJSON_CreateObject(); 
             sw_cfg_t *sw = (sw_cfg_t*)&dev_cfg.banks[b].switches[i];
             
-            // Arrays for MIDI Data
+            // Arrays
             int p[] = {sw->p_type, sw->p_chan, sw->p_d1}; 
             int p2[] = {sw->lp_type, sw->lp_chan, sw->lp_d1}; 
             int p3[] = {sw->l_type, sw->l_chan, sw->l_d1};
@@ -739,24 +711,13 @@ esp_err_t get_json(httpd_req_t *req) {
             cJSON_AddItemToObject(item, "lp", cJSON_CreateIntArray(p2, 3)); 
             cJSON_AddItemToObject(item, "l", cJSON_CreateIntArray(p3, 3)); 
             
-            // Standard Configs
             cJSON_AddBoolToObject(item, "lp_en", (sw->lp_enabled == 1)); 
             cJSON_AddBoolToObject(item, "tog", (sw->toggle_mode == 1)); 
+            cJSON_AddNumberToObject(item, "edge", sw->p_edge); // The Edge feature
 
-            // Inside the switch loop in get_json:
-            cJSON_AddNumberToObject(item, "edge", sw->p_edge); // NEW
-            
-            // === NEW PER-ACTION GROUPING KEYS ===
-            cJSON_AddNumberToObject(item, "pe", sw->p_excl);       // Press Excl
-            cJSON_AddNumberToObject(item, "pm", sw->p_master);     // Press Master
-            
-            cJSON_AddNumberToObject(item, "lpe", sw->lp_excl);     // LP Excl
-            cJSON_AddNumberToObject(item, "lpm", sw->lp_master);   // LP Master
-            
-            cJSON_AddNumberToObject(item, "le", sw->l_excl);       // Release Excl
-            cJSON_AddNumberToObject(item, "lm", sw->l_master);     // Release Master
-            
-            // Global Membership (Slave ID)
+            cJSON_AddNumberToObject(item, "pe", sw->p_excl); cJSON_AddNumberToObject(item, "pm", sw->p_master);
+            cJSON_AddNumberToObject(item, "lpe", sw->lp_excl); cJSON_AddNumberToObject(item, "lpm", sw->lp_master);
+            cJSON_AddNumberToObject(item, "le", sw->l_excl); cJSON_AddNumberToObject(item, "lm", sw->l_master);
             cJSON_AddNumberToObject(item, "incl", sw->incl_mask);
             
             cJSON_AddItemToArray(sw_arr, item);
@@ -781,9 +742,6 @@ esp_err_t post_set_bank(httpd_req_t *req) {
         int b = atoi(buf);
         if (b >= 0 && b < BANK_COUNT) {
             dev_cfg.current_bank = b;
-            // Note: We can't easily access 'sw_toggled_on' here because it is a local variable inside midi_task.
-            // However, the issue you described is specifically about the footswitches, 
-            // so the fix above handles the main problem.
         }
     } 
     return httpd_resp_sendstr(req, "OK"); 
@@ -878,27 +836,26 @@ esp_err_t post_save(httpd_req_t *req) {
         cJSON *bri = cJSON_GetObjectItem(root, "brightness"); 
         if (bri) dev_cfg.global_brightness = bri->valueint;
         
-        // Parse Expression Settings
-        cJSON *exp = cJSON_GetObjectItem(root, "exp");
-        if(exp) {
-            cJSON *ch = cJSON_GetObjectItem(exp, "chan");
-            if(ch) dev_cfg.exp_pedal.chan = ch->valueint;
-            
-            cJSON *cc = cJSON_GetObjectItem(exp, "cc");
-            if(cc) dev_cfg.exp_pedal.cc = cc->valueint;
-
-            cJSON *mn = cJSON_GetObjectItem(exp, "min");
-            if(mn) dev_cfg.exp_pedal.min = mn->valueint;
-
-            cJSON *mx = cJSON_GetObjectItem(exp, "max");
-            if(mx) dev_cfg.exp_pedal.max = mx->valueint;
-        }
+        // REMOVED: Global exp parsing (now inside banks)
 
         // Parse Banks
         cJSON *banks = cJSON_GetObjectItem(root, "banks");
         if(banks) {
             for(int b=0; b<BANK_COUNT; b++) {
                 cJSON *bk = cJSON_GetArrayItem(banks, b); 
+                // --- NEW: Parse Expression Per Bank ---
+                cJSON *exp = cJSON_GetObjectItem(bk, "exp");
+                if(exp) {
+                    volatile exp_cfg_t *e = &dev_cfg.banks[b].exp;
+                    cJSON *ch = cJSON_GetObjectItem(exp, "ch"); if(ch) e->chan = ch->valueint;
+                    cJSON *cc = cJSON_GetObjectItem(exp, "cc"); if(cc) e->cc = cc->valueint;
+                    cJSON *mn = cJSON_GetObjectItem(exp, "min"); if(mn) e->min = mn->valueint;
+                    
+                    // FIX: Copy/Paste error (was setting e->max = mn->valueint)
+                    cJSON *mx = cJSON_GetObjectItem(exp, "max"); if(mx) e->max = mx->valueint; 
+                    
+                    cJSON *cv = cJSON_GetObjectItem(exp, "crv"); if(cv) e->curve = cv->valueint;
+                }
                 cJSON *sws = cJSON_GetObjectItem(bk, "switches");
                 if(sws) {
                     for(int i=0; i<SWITCH_COUNT; i++) {
@@ -937,6 +894,7 @@ esp_err_t post_save(httpd_req_t *req) {
                         if(tog) { s->toggle_mode = cJSON_IsTrue(tog) ? 1 : 0; } 
                         if(incl) { s->incl_mask = incl->valueint; }
                         if(edge) s->p_edge = edge->valueint; // NEW
+                        
                         // New Group Assignments
                         if(pe)  s->p_excl    = pe->valueint;
                         if(pm)  s->p_master  = pm->valueint;
@@ -987,12 +945,20 @@ void app_main(void) {
 
     if (!load_dev_success) {
         dev_cfg.current_bank = 0; dev_cfg.sw6_cycle_rev = 0; dev_cfg.sw7_cycle_fwd = 0; dev_cfg.global_brightness = 127;
-        for(int b=0; b<BANK_COUNT; b++) for(int i=0; i<SWITCH_COUNT; i++) dev_cfg.banks[b].switches[i] = (sw_cfg_t){MIDI_CC, 0, 80+i, MIDI_CC, 0, 90+i, MIDI_CC, 0, 80+i, 1, 0}; 
-        // Init Exp Defaults
-        dev_cfg.exp_pedal.chan = 0;
-        dev_cfg.exp_pedal.cc = 11;
-        dev_cfg.exp_pedal.min = 100;
-        dev_cfg.exp_pedal.max = 4000;
+        
+        // Loop through all banks to init switches AND expression defaults
+        for(int b=0; b<BANK_COUNT; b++) {
+            // Default Switches
+            for(int i=0; i<SWITCH_COUNT; i++) {
+                dev_cfg.banks[b].switches[i] = (sw_cfg_t){MIDI_CC, 0, 80+i, 0, MIDI_CC, 0, 90+i, MIDI_CC, 0, 80+i, 0, 0, 0, 0, 0, 0, 0, 0, 0}; 
+            }
+            // Default Expression (Per Bank)
+            dev_cfg.banks[b].exp.chan = 0;
+            dev_cfg.banks[b].exp.cc = 11;
+            dev_cfg.banks[b].exp.min = 100;
+            dev_cfg.banks[b].exp.max = 4000;
+            dev_cfg.banks[b].exp.curve = 0;
+        }
     }
     if (!load_wifi_success) { strcpy(w_cfg.ssid, "SSID"); strcpy(w_cfg.pass, "Password"); }
 
@@ -1264,7 +1230,7 @@ void midi_task(void *pv) {
                     bool is_cycling = false;
 
                     // A. Bank Cycle / Direct Bank
-                    if (cfg->p_type >= 250 && cfg->p_type <= 255) { 
+                    if (cfg->p_type >= 250) { 
                         if (cfg->p_type == 250) dev_cfg.current_bank = (dev_cfg.current_bank - 1 + BANK_COUNT) % BANK_COUNT; 
                         else if (cfg->p_type == 251) dev_cfg.current_bank = (dev_cfg.current_bank + 1) % BANK_COUNT; 
                         else {
