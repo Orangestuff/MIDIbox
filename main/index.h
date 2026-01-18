@@ -12,6 +12,7 @@
     h2 { color: #00d1b2; text-align: center; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 30px; }
     
     .wifi-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ffa502; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+    .power-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #02ff0f; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
     .exp-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #e74c3c; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
     
     .wifi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }
@@ -69,7 +70,20 @@
         <button class='btn-scan' id='scan-btn' onclick='scan()'>Scan WiFi</button>
         <button class='btn-wifi' onclick='saveWifi()'>Save WiFi & Reboot</button>
     </div>
-
+<div class='power-card'>
+        <h3>Power Saving</h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <label>Auto-Sleep Enabled</label>
+            <div class="toggle-switch">
+                <input type="checkbox" id="ds_en" onchange="updGlob('ds_en', this.checked)">
+                <span class="slider"></span>
+            </div>
+        </div>
+        <div>
+            <label>Idle Timeout (Minutes)</label>
+            <input type="number" id="ds_min" min="1" max="120" style="width:100%;" onchange="updGlob('ds_min', this.value)">
+        </div>
+    </div>
 <div class='exp-card'>
         <h3 style="margin-top:0;">Expression Config (Bank <span id="exp_bank_num"></span>)</h3>
         
@@ -235,17 +249,17 @@
         if(fullData) fullData.brightness = parseInt(val);
     }
 
-// FIXED: Now updates both the Input Box AND the Data Model
+    // FIXED: Now updates both the Input Box AND the Data Model
     function setExpMin() { 
         const val = liveExpVal;
         document.getElementById('exp_min').value = val; 
-        updExp('min', val); // <--- This was missing!
+        updExp('min', val); 
     }
 
     function setExpMax() { 
         const val = liveExpVal;
         document.getElementById('exp_max').value = val; 
-        updExp('max', val); // <--- This was missing!
+        updExp('max', val); 
     }
 
     async function pollStatus() {
@@ -298,7 +312,13 @@
             }
         }
     }
-
+    window.updGlob = function(key, val) {
+        if(!fullData) return;
+        // Check if the key is the sleep boolean
+        if (key === 'ds_en') fullData.ds_en = val; // Boolean is passed directly
+        else if (key === 'ds_min') fullData.ds_min = parseInt(val);
+        else fullData[key] = parseInt(val); // Standard int handling for others
+    }
     // Helper to update Expression settings in the JSON
     window.updExp = function(key, val) {
         if(!fullData) return;
@@ -332,7 +352,7 @@
         }
     }
 
-function render() {
+    function render() {
         if(!fullData) return;
         const bank = fullData.banks[curBank];
         
@@ -345,12 +365,12 @@ function render() {
         document.getElementById('exp_min').value = bank.exp.min;
         document.getElementById('exp_max').value = bank.exp.max;
         document.getElementById('exp_curve').value = bank.exp.crv || 0; // Curve Dropdown
-        
+        document.getElementById('ds_en').checked = fullData.ds_en;
+        document.getElementById('ds_min').value = fullData.ds_min;
+
         // --- 2. RENDER SWITCHES ---
         let html = '';
         bank.switches.forEach((s, i) => {
-            // ... (The rest of your existing switch render code goes here) ...
-            // ... (Copy from previous working version) ...
             const isBank = (s.p[0] >= 250);
             const disClass = isBank ? "disabled" : ""; 
             const disAttr = isBank ? "disabled" : "";
@@ -361,16 +381,24 @@ function render() {
             const openRel = (!isBank && (s.l[0] !== 0)) ? "open" : "";
 
             const mkInputs = (type, ch, val, ex, lead, k_type, k_ex, k_lead) => {
-                const hideClass = (type === 0) ? "hidden-input" : "";
+                // MODIFIED: Only hide MIDI Channel/Value if Type is 0. 
+                // Group box is NOT hidden.
+                const hideMidi = (type === 0) ? "hidden-input" : "";
                 const hideExcl = (k_type === 'l') ? "visibility:hidden;" : "";
+                
+                // Adjust Grid Columns: If type=0, we only show Select + Groups (2 cols). Else 3 cols.
+                const gridStyle = (type === 0) ? "grid-template-columns: 1.5fr 1fr;" : "grid-template-columns: 1.5fr 1fr 1fr;";
+
                 return `
-                <div class='input-group' style="grid-template-columns: ${type===0 ? '1fr' : '1.5fr 1fr 1fr'};">
+                <div class='input-group' style="${gridStyle}">
                     <select onchange="upd(${i},'${k_type}',0,this.value)">
                         ${(k_type=='p'?genMainTypes(type):genSecTypes(type))}
                     </select>
-                    <input class="${hideClass} ${disClass}" ${disAttr} type='number' value='${ch + 1}' onchange="upd(${i},'${k_type}',1,this.value)" min='1' max='16' title="Channel">
-                    <input class="${hideClass} ${disClass}" ${disAttr} type='number' value='${val}' onchange="upd(${i},'${k_type}',2,this.value)" min='0' max='127' title="Value">
-                    <div class="${hideClass}" style="display:flex; align-items:center; gap:2px; margin-left:5px; border-left:1px solid #444; padding-left:5px;">
+                    
+                    <input class="${hideMidi} ${disClass}" ${disAttr} type='number' value='${ch + 1}' onchange="upd(${i},'${k_type}',1,this.value)" min='1' max='16' title="Channel">
+                    <input class="${hideMidi} ${disClass}" ${disAttr} type='number' value='${val}' onchange="upd(${i},'${k_type}',2,this.value)" min='0' max='127' title="Value">
+                    
+                    <div class="" style="display:flex; align-items:center; gap:2px; margin-left:5px; border-left:1px solid #444; padding-left:5px;">
                         <input class="${disClass}" ${disAttr} type="text" placeholder="Ex" title="Exclusive Mask (🛡️)" style="width:30px; border-color:#e74c3c; ${hideExcl}" value="${fromMask(ex)}" onchange="updVal(${i}, '${k_ex}', this.value)">
                         <input class="${disClass}" ${disAttr} type="text" placeholder="Ld" title="Lead/Master Mask (⚡)" style="width:30px; border-color:#f1c40f;" value="${fromMask(lead)}" onchange="updVal(${i}, '${k_lead}', this.value)">
                     </div>
