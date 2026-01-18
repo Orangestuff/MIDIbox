@@ -306,7 +306,6 @@ function render() {
         let html = '';
         
         bank.switches.forEach((s, i) => {
-            // 1. Determine States
             const isBank = (s.p[0] >= 250);
             
             // Visual Classes
@@ -315,9 +314,9 @@ function render() {
 
             const inclText = (s.incl !== undefined) ? fromMask(s.incl) : ""; 
             const togEnabled = (s.tog !== undefined) ? s.tog : false; 
+            const edgeVal = (s.edge !== undefined) ? s.edge : 0; // NEW: Edge Value
             
-            // LOGIC FIX: If isBank is true, force 'open' to false (collapse)
-            // Otherwise, check if there is actual data to decide if we should auto-open
+            // Accordion States
             const openLp = (!isBank && (s.lp[0] !== 0 || s.lp_en)) ? "open" : "";
             const openRel = (!isBank && (s.l[0] !== 0)) ? "open" : "";
 
@@ -377,7 +376,16 @@ function render() {
                 </div>
 
                 <div class='grid-section'>
-                    <label style="color:#00d1b2; font-weight:bold;">Short Press</label>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                        <label style="color:#00d1b2; font-weight:bold;">Short Press</label>
+                        
+                        <select class="${disClass}" ${disAttr} 
+                            style="width:auto; padding:0 5px; font-size:0.7em; height:20px;" 
+                            onchange="updVal(${i}, 'edge', this.value)">
+                            <option value="0" ${edgeVal==0?"selected":""}>Trig: Press</option>
+                            <option value="1" ${edgeVal==1?"selected":""}>Trig: Release</option>
+                        </select>
+                    </div>
                     ${mkInputs(s.p[0], s.p[1], s.p[2], s.pe, s.pm, 'p', 'pe', 'pm')}
                 </div>
 
@@ -400,7 +408,7 @@ function render() {
                     <div style="padding-top:5px;">
                         ${mkInputs(s.l[0], s.l[1], s.l[2], s.le, s.lm, 'l', 'le', 'lm')}
                     </div>
-                </details>
+                </details>a
                 
             </div>`;
         });
