@@ -114,6 +114,8 @@ typedef struct {
     uint8_t p_excl;   
     uint8_t p_master; 
 
+    uint8_t p_edge; // NEW: 0=Press (Default), 1=Release
+
     // Long Press
     uint8_t lp_excl; 
     uint8_t lp_master;
@@ -740,6 +742,9 @@ esp_err_t get_json(httpd_req_t *req) {
             // Standard Configs
             cJSON_AddBoolToObject(item, "lp_en", (sw->lp_enabled == 1)); 
             cJSON_AddBoolToObject(item, "tog", (sw->toggle_mode == 1)); 
+
+            // Inside the switch loop in get_json:
+            cJSON_AddNumberToObject(item, "edge", sw->p_edge); // NEW
             
             // === NEW PER-ACTION GROUPING KEYS ===
             cJSON_AddNumberToObject(item, "pe", sw->p_excl);       // Press Excl
@@ -910,6 +915,9 @@ esp_err_t post_save(httpd_req_t *req) {
                         cJSON *tog = cJSON_GetObjectItem(it, "tog"); 
                         cJSON *incl = cJSON_GetObjectItem(it, "incl");
 
+                        // Inside the switch loop in post_save:
+                        cJSON *edge = cJSON_GetObjectItem(it, "edge");
+
                         // === NEW PER-ACTION GROUPING KEYS ===
                         cJSON *pe = cJSON_GetObjectItem(it, "pe");
                         cJSON *pm = cJSON_GetObjectItem(it, "pm");
@@ -928,7 +936,7 @@ esp_err_t post_save(httpd_req_t *req) {
                         if(lpen) { s->lp_enabled = cJSON_IsTrue(lpen) ? 1 : 0; }
                         if(tog) { s->toggle_mode = cJSON_IsTrue(tog) ? 1 : 0; } 
                         if(incl) { s->incl_mask = incl->valueint; }
-
+                        if(edge) s->p_edge = edge->valueint; // NEW
                         // New Group Assignments
                         if(pe)  s->p_excl    = pe->valueint;
                         if(pm)  s->p_master  = pm->valueint;
@@ -1179,12 +1187,11 @@ void midi_task(void *pv) {
     int flash_source_sw_idx = -1; 
 
     while(1) {
-        // --- HIGH PRECISION TIME ---
         int64_t now_us = esp_timer_get_time();
         uint32_t now_ms = (uint32_t)(now_us / 1000);
 
         // ============================================================
-        //  FAST LOOP (Executes every ~1ms)
+        //  FAST LOOP
         // ============================================================
 
         // 1. SCAN MATRIX
@@ -1193,9 +1200,8 @@ void midi_task(void *pv) {
             esp_rom_delay_us(10); 
             for (int c = 0; c < NUM_COLS; c++) {
                 int sw_idx = MATRIX_MAP[r][c];
-                bool pressed = (gpio_get_level(COL_PINS[c]) == 0); // Active Low
+                bool pressed = (gpio_get_level(COL_PINS[c]) == 0); 
                 
-                // Debounce
                 if (pressed != button_state[sw_idx]) {
                     if ((now_ms - last_debounce_time[sw_idx]) > 50) { 
                         button_state[sw_idx] = pressed;
@@ -1206,58 +1212,64 @@ void midi_task(void *pv) {
             gpio_set_level(ROW_PINS[r], 1); 
         }
 
-        // 2. COMBO CHECK (Btn 5 + Btn 8)
+        // 2. COMBO CHECK
         if (button_state[4] && button_state[7]) {
             if (combo_timer == 0) combo_timer = now_ms;
-            
             if (now_ms - combo_timer > COMBO_HOLD_MS && !combo_triggered) {
                 combo_triggered = true;
                 bool new_wifi_mode = !is_wifi_on;
                 set_wifi_mode(new_wifi_mode);
-                
-                // Visual Confirmation
                 uint8_t r = new_wifi_mode ? dev_cfg.global_brightness : 0;
                 uint8_t g = new_wifi_mode ? dev_cfg.global_brightness : 0;
                 uint8_t b = dev_cfg.global_brightness;
-
                 for(int j=0; j<LED_COUNT; j++) set_pixel(j, r, g, b);
                 refresh_leds();
                 vTaskDelay(pdMS_TO_TICKS(500)); 
             }
         } else {
-            combo_timer = 0; 
-            combo_triggered = false;
+            combo_timer = 0; combo_triggered = false;
         }
 
         // 3. SWITCH LOGIC PROCESSOR
         for(int i=0; i<SWITCH_COUNT; i++) {
             bool s = button_state[i];
             bool last_s = last_button_state[i];
+            sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[dev_cfg.current_bank].switches[i];
+            
+            bool trigger_action = false; // Flag: Should we fire the "Press" action now?
 
             // Detect Edge
             if (s != last_s) { 
-                sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[dev_cfg.current_bank].switches[i];
                 
-                // === PRESS EVENT ===
+                // === PHYSICAL PRESS ===
                 if (s == true) { 
+                    press_start[i] = now_ms; 
+                    lp_triggered[i] = false; 
+
+                    // If Leading Edge (0), Trigger NOW
+                    if (cfg->p_edge == 0) trigger_action = true;
+                } 
+                // === PHYSICAL RELEASE ===
+                else { 
+                    // If Trailing Edge (1) AND No LP happened, Trigger NOW
+                    if (cfg->p_edge == 1 && !lp_triggered[i]) trigger_action = true;
+                }
+                
+                // -----------------------------------------------------
+                //  ACTION EXECUTION (Runs on Press OR Release based on Config)
+                // -----------------------------------------------------
+                if (trigger_action) {
                     flash_end_time = now_ms + 50; 
                     flash_source_sw_idx = i;
-
                     bool is_cycling = false;
-                    
-                    // A. Check for Bank Cycle Types
+
+                    // A. Bank Cycle / Direct Bank
                     if (cfg->p_type >= 250 && cfg->p_type <= 255) { 
-                        if (cfg->p_type == 250) { 
-                            dev_cfg.current_bank = (dev_cfg.current_bank - 1 + BANK_COUNT) % BANK_COUNT; 
-                        } 
-                        else if (cfg->p_type == 251) { 
-                            dev_cfg.current_bank = (dev_cfg.current_bank + 1) % BANK_COUNT; 
-                        }
+                        if (cfg->p_type == 250) dev_cfg.current_bank = (dev_cfg.current_bank - 1 + BANK_COUNT) % BANK_COUNT; 
+                        else if (cfg->p_type == 251) dev_cfg.current_bank = (dev_cfg.current_bank + 1) % BANK_COUNT; 
                         else {
                             uint8_t target_bank = cfg->p_type - 252;
-                            if (target_bank < BANK_COUNT) {
-                                dev_cfg.current_bank = target_bank;
-                            }
+                            if (target_bank < BANK_COUNT) dev_cfg.current_bank = target_bank;
                         }
                         uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0); 
                         is_cycling = true; 
@@ -1265,36 +1277,29 @@ void midi_task(void *pv) {
 
                     // B. Standard Logic
                     if (!is_cycling) { 
-                        // --- TOGGLE MODE ---
                         if (cfg->toggle_mode) {
                             if (!sw_toggled_on[dev_cfg.current_bank][i]) {
-                                // CASE: Turning ON
+                                // Turning ON
                                 trigger_switch_on(dev_cfg.current_bank, i, cfg->p_excl, cfg->p_master);
                             } else {
-                                // CASE: Turning OFF
-                                // Use Recursive OFF to ensure slaves of slaves die too
+                                // Turning OFF
                                 trigger_switch_off(dev_cfg.current_bank, i);
                             }
-                        } 
-                        // --- MOMENTARY MODE ---
-                        else {
-                            if (sw_toggled_on[dev_cfg.current_bank][i]) {
-                                sw_toggled_on[dev_cfg.current_bank][i] = false;
-                            }
+                        } else {
+                            // Momentary Press
+                            if (sw_toggled_on[dev_cfg.current_bank][i]) sw_toggled_on[dev_cfg.current_bank][i] = false;
                             trigger_switch_on(dev_cfg.current_bank, i, cfg->p_excl, cfg->p_master);
                         }
                     }
-                    press_start[i] = now_ms; 
-                    lp_triggered[i] = false; 
-
-                } else { 
-                // === RELEASE EVENT ===
-                    if(cfg->p_type < 250) { 
-                        // Handle Momentary Release
-                        if (!cfg->toggle_mode) { 
-                            // Use Recursive OFF to clean up Master AND all Slaves
-                            trigger_switch_off(dev_cfg.current_bank, i);
-                        }
+                }
+                
+                // -----------------------------------------------------
+                //  RELEASE CLEANUP (Always runs on Physical Release)
+                // -----------------------------------------------------
+                if (s == false && cfg->p_type < 250) {
+                    // Momentary Release Logic
+                    if (!cfg->toggle_mode) { 
+                        trigger_switch_off(dev_cfg.current_bank, i);
                     }
                 }
                 last_button_state[i] = s; 
@@ -1302,41 +1307,32 @@ void midi_task(void *pv) {
             
             // === LONG PRESS CHECK ===
             if(button_state[i] && !lp_triggered[i] && (now_ms - press_start[i] > LONG_PRESS_MS)) {
-                sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[dev_cfg.current_bank].switches[i];
+                // Only allow LP if we aren't waiting for a Trailing Edge trigger?
+                // Actually, standard behavior is: Hold > LP fires > Release (Short Press skipped because LP triggered)
+                // This works perfectly with the logic above.
                 if(cfg->lp_enabled == 1 && cfg->p_type < 250) { 
                     lp_triggered[i] = true; 
                     send_midi_msg(cfg->lp_type, cfg->lp_chan, cfg->lp_d1, 127); 
 
-                    // --- LONG PRESS GROUPING LOGIC ---
-                    // 1. LP Exclusive (Recursive Off)
+                    // LP Grouping
                     if (cfg->lp_excl > 0) {
                          for (int b = 0; b < BANK_COUNT; b++) {
                             for (int s = 0; s < SWITCH_COUNT; s++) {
                                 if (b == dev_cfg.current_bank && s == i) continue; 
                                 sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
-                                
-                                if ((other->p_excl & cfg->lp_excl) != 0) {
-                                     // Recursive kill for rivals
-                                     trigger_switch_off(b, s);
-                                }
+                                if ((other->p_excl & cfg->lp_excl) != 0) trigger_switch_off(b, s);
                             }
                         }
                     }
-                    
-                    // 2. LP Master (Recursive On)
                     if (cfg->lp_master > 0) {
                         for (int b = 0; b < BANK_COUNT; b++) {
                             for (int s = 0; s < SWITCH_COUNT; s++) {
                                 if (b == dev_cfg.current_bank && s == i) continue; 
                                 sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
-                                
-                                if ((other->incl_mask & cfg->lp_master) != 0) {
-                                    trigger_switch_on(b, s, other->p_excl, other->p_master);
-                                }
+                                if ((other->incl_mask & cfg->lp_master) != 0) trigger_switch_on(b, s, other->p_excl, other->p_master);
                             }
                         }
                     }
-                    
                     flash_end_time = now_ms + 50; 
                     flash_source_sw_idx = i; 
                 }
@@ -1352,7 +1348,6 @@ void midi_task(void *pv) {
             read_battery();
 
             if (now_ms < flash_end_time) {
-                // Flash State
                 uint8_t fw = dev_cfg.global_brightness / 3; 
                 uint8_t br = BANK_COLORS[dev_cfg.current_bank][0] * dev_cfg.global_brightness / 255;
                 uint8_t bg = BANK_COLORS[dev_cfg.current_bank][1] * dev_cfg.global_brightness / 255;
@@ -1370,12 +1365,10 @@ void midi_task(void *pv) {
                 refresh_leds();
             } 
             else {
-                // Standard State
                 flash_source_sw_idx = -1; 
                 update_status_leds(g_bat_voltage, dev_cfg.current_bank, sw_toggled_on[dev_cfg.current_bank], button_state);
             }
         }
-
         const TickType_t delay = pdMS_TO_TICKS(1);
         vTaskDelay(delay == 0 ? 1 : delay);
     }
