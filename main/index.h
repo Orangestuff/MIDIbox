@@ -70,35 +70,49 @@
         <button class='btn-wifi' onclick='saveWifi()'>Save WiFi & Reboot</button>
     </div>
 
-    <div class='exp-card'>
-        <h3>Expression Pedal Config</h3>
+<div class='exp-card'>
+        <h3 style="margin-top:0;">Expression Config (Bank <span id="exp_bank_num"></span>)</h3>
+        
         <div class='wifi-grid'>
-            <div><label>Channel (1-16)</label><input type='number' id='exp_chan' min='1' max='16'></div>
+            <div><label>Channel (1-16)</label><input type='number' id='exp_chan' min='1' max='16' onchange="updExp('ch', this.value)"></div>
+            
             <div>
                 <label>Pedal Function</label>
-                <select id="exp_func">
+                <select id="exp_func" onchange="updExp('cc', this.value)">
                     <option value="11">Expression (CC 11)</option>
                     <option value="7">Volume (CC 7)</option>
                     <option value="1">Modulation (CC 1)</option>
                     <option value="74">Filter Cutoff (CC 74)</option>
-                </select>
+                    </select>
             </div>
         </div>
+
+        <div style="margin-bottom:15px;">
+             <label>Response Curve 
+
+[Image of sigmoid function]
+</label>
+             <select id="exp_curve" onchange="updExp('crv', this.value)">
+                 <option value="0">Linear (Standard)</option>
+                 <option value="1">Exponential (Slow Start / Swell)</option>
+                 <option value="2">Logarithmic (Fast Start)</option>
+             </select>
+        </div>
         
-        <div style="background: #252525; padding: 10px; border-radius: 5px; margin-top: 10px;">
+        <div style="background: #252525; padding: 10px; border-radius: 5px;">
             <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                <label style="color:#aaa;">Calibration</label>
-                <label style="color:#e74c3c;">Live Raw Value: <span id="exp_live_val" style="font-weight:bold; font-size:1.2em;">---</span></label>
+                <label style="color:#aaa;">Calibration (This Bank)</label>
+                <label style="color:#e74c3c;">Live Raw: <span id="exp_live_val" style="font-weight:bold;">---</span></label>
             </div>
             <div class='wifi-grid'>
                 <div>
-                    <label>Heel Position</label>
-                    <input type='number' id='exp_min'>
+                    <label>Heel (Min)</label>
+                    <input type='number' id='exp_min' onchange="updExp('min', this.value)">
                     <button class="btn-cal" onclick="setExpMin()">Set to Current</button>
                 </div>
                 <div>
-                    <label>Toe Position</label>
-                    <input type='number' id='exp_max'>
+                    <label>Toe (Max)</label>
+                    <input type='number' id='exp_max' onchange="updExp('max', this.value)">
                     <button class="btn-cal" onclick="setExpMax()">Set to Current</button>
                 </div>
             </div>
@@ -221,8 +235,18 @@
         if(fullData) fullData.brightness = parseInt(val);
     }
 
-    function setExpMin() { document.getElementById('exp_min').value = liveExpVal; }
-    function setExpMax() { document.getElementById('exp_max').value = liveExpVal; }
+// FIXED: Now updates both the Input Box AND the Data Model
+    function setExpMin() { 
+        const val = liveExpVal;
+        document.getElementById('exp_min').value = val; 
+        updExp('min', val); // <--- This was missing!
+    }
+
+    function setExpMax() { 
+        const val = liveExpVal;
+        document.getElementById('exp_max').value = val; 
+        updExp('max', val); // <--- This was missing!
+    }
 
     async function pollStatus() {
         if (document.activeElement.tagName === "INPUT" && document.activeElement.id !== "exp_chan") return; 
@@ -275,6 +299,14 @@
         }
     }
 
+    // Helper to update Expression settings in the JSON
+    window.updExp = function(key, val) {
+        if(!fullData) return;
+        let v = parseInt(val);
+        if(key === 'ch') v = v - 1; // 0-indexed
+        fullData.banks[curBank].exp[key] = v;
+    }
+
     window.upd = function(swIdx, cat, valIdx, val) {
         if(!fullData) return;
         let v = parseInt(val);
@@ -303,52 +335,44 @@
 function render() {
         if(!fullData) return;
         const bank = fullData.banks[curBank];
-        let html = '';
         
+        // --- 1. RENDER EXPRESSION CARD (Per Bank) ---
+        // Ensure exp object exists in JSON
+        if (!bank.exp) bank.exp = {ch:0, cc:11, min:0, max:4095, crv:0};
+        
+        document.getElementById('exp_chan').value = bank.exp.ch + 1;
+        document.getElementById('exp_func').value = bank.exp.cc;
+        document.getElementById('exp_min').value = bank.exp.min;
+        document.getElementById('exp_max').value = bank.exp.max;
+        document.getElementById('exp_curve').value = bank.exp.crv || 0; // Curve Dropdown
+        
+        // --- 2. RENDER SWITCHES ---
+        let html = '';
         bank.switches.forEach((s, i) => {
+            // ... (The rest of your existing switch render code goes here) ...
+            // ... (Copy from previous working version) ...
             const isBank = (s.p[0] >= 250);
-            
-            // Visual Classes
             const disClass = isBank ? "disabled" : ""; 
             const disAttr = isBank ? "disabled" : "";
-
             const inclText = (s.incl !== undefined) ? fromMask(s.incl) : ""; 
             const togEnabled = (s.tog !== undefined) ? s.tog : false; 
-            const edgeVal = (s.edge !== undefined) ? s.edge : 0; // NEW: Edge Value
-            
-            // Accordion States
+            const edgeVal = (s.edge !== undefined) ? s.edge : 0; 
             const openLp = (!isBank && (s.lp[0] !== 0 || s.lp_en)) ? "open" : "";
             const openRel = (!isBank && (s.l[0] !== 0)) ? "open" : "";
 
-            // INPUT GENERATOR
             const mkInputs = (type, ch, val, ex, lead, k_type, k_ex, k_lead) => {
                 const hideClass = (type === 0) ? "hidden-input" : "";
                 const hideExcl = (k_type === 'l') ? "visibility:hidden;" : "";
-
                 return `
                 <div class='input-group' style="grid-template-columns: ${type===0 ? '1fr' : '1.5fr 1fr 1fr'};">
                     <select onchange="upd(${i},'${k_type}',0,this.value)">
                         ${(k_type=='p'?genMainTypes(type):genSecTypes(type))}
                     </select>
-                    
-                    <input class="${hideClass} ${disClass}" ${disAttr} type='number' value='${ch + 1}' 
-                        onchange="upd(${i},'${k_type}',1,this.value)" 
-                        min='1' max='16' title="Channel">
-                        
-                    <input class="${hideClass} ${disClass}" ${disAttr} type='number' value='${val}' 
-                        onchange="upd(${i},'${k_type}',2,this.value)" 
-                        min='0' max='127' title="Value">
-                    
+                    <input class="${hideClass} ${disClass}" ${disAttr} type='number' value='${ch + 1}' onchange="upd(${i},'${k_type}',1,this.value)" min='1' max='16' title="Channel">
+                    <input class="${hideClass} ${disClass}" ${disAttr} type='number' value='${val}' onchange="upd(${i},'${k_type}',2,this.value)" min='0' max='127' title="Value">
                     <div class="${hideClass}" style="display:flex; align-items:center; gap:2px; margin-left:5px; border-left:1px solid #444; padding-left:5px;">
-                        <input class="${disClass}" ${disAttr} type="text" placeholder="Ex" title="Exclusive Mask (🛡️)" 
-                            style="width:30px; border-color:#e74c3c; ${hideExcl}" 
-                            value="${fromMask(ex)}" 
-                            onchange="updVal(${i}, '${k_ex}', this.value)">
-                            
-                        <input class="${disClass}" ${disAttr} type="text" placeholder="Ld" title="Lead/Master Mask (⚡)" 
-                            style="width:30px; border-color:#f1c40f;" 
-                            value="${fromMask(lead)}" 
-                            onchange="updVal(${i}, '${k_lead}', this.value)">
+                        <input class="${disClass}" ${disAttr} type="text" placeholder="Ex" title="Exclusive Mask (🛡️)" style="width:30px; border-color:#e74c3c; ${hideExcl}" value="${fromMask(ex)}" onchange="updVal(${i}, '${k_ex}', this.value)">
+                        <input class="${disClass}" ${disAttr} type="text" placeholder="Ld" title="Lead/Master Mask (⚡)" style="width:30px; border-color:#f1c40f;" value="${fromMask(lead)}" onchange="updVal(${i}, '${k_lead}', this.value)">
                     </div>
                 </div>`;
             };
@@ -357,59 +381,45 @@ function render() {
             <div class='sw'>
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:10px;">
                     <h3 style="margin:0; border:none; font-size:1em;">SWITCH ${i+1}</h3>
-                    
                     <div style="display:flex; align-items:center; gap:10px;">
                         <div style="display:flex; align-items:center; gap:4px;" title="Groups this switch belongs to (Slave)">
                             <label style="font-size:1.2em; margin:0;">🔗</label>
-                            <input class="${disClass}" ${disAttr} type="text" 
-                                style="width:40px; border:1px solid #2ecc71; text-align:center;" 
-                                value="${inclText}" 
-                                onchange="updVal(${i}, 'incl', this.value)">
+                            <input class="${disClass}" ${disAttr} type="text" style="width:40px; border:1px solid #2ecc71; text-align:center;" value="${inclText}" onchange="updVal(${i}, 'incl', this.value)">
                         </div>
-                        
                         <div style="display:flex; align-items:center; background:#252525; padding:2px 6px; border-radius:4px;">
                             <label style="font-size:0.7em; margin-right:4px; font-weight:bold;">TOGGLE</label>
-                            <input class="${disClass}" ${disAttr} type="checkbox" ${togEnabled ? "checked" : ""} 
-                                onchange="updBool(${i}, 'tog', this.checked)">
+                            <input class="${disClass}" ${disAttr} type="checkbox" ${togEnabled ? "checked" : ""} onchange="updBool(${i}, 'tog', this.checked)">
                         </div>
                     </div>
                 </div>
-
                 <div class='grid-section'>
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
                         <label style="color:#00d1b2; font-weight:bold;">Short Press</label>
-                        
-                        <select class="${disClass}" ${disAttr} 
-                            style="width:auto; padding:0 5px; font-size:0.7em; height:20px;" 
-                            onchange="updVal(${i}, 'edge', this.value)">
+                        <select class="${disClass}" ${disAttr} style="width:auto; padding:0 5px; font-size:0.7em; height:20px;" onchange="updVal(${i}, 'edge', this.value)">
                             <option value="0" ${edgeVal==0?"selected":""}>Trig: Press</option>
                             <option value="1" ${edgeVal==1?"selected":""}>Trig: Release</option>
                         </select>
                     </div>
                     ${mkInputs(s.p[0], s.p[1], s.p[2], s.pe, s.pm, 'p', 'pe', 'pm')}
                 </div>
-
                 <details ${openLp} class="${disClass}" ${disAttr}>
                     <summary>Long Press Options</summary>
                     <div style="padding-top:5px;">
                         <div class="label-row">
                             <label>Enable Long Press</label>
-                            <input type="checkbox" ${s.lp_en ? "checked" : ""} 
-                                onchange="updBool(${i}, 'lp_en', this.checked)">
+                            <input type="checkbox" ${s.lp_en ? "checked" : ""} onchange="updBool(${i}, 'lp_en', this.checked)">
                         </div>
                         <div style="${s.lp_en ? '' : 'opacity:0.5; pointer-events:none;'}">
                             ${mkInputs(s.lp[0], s.lp[1], s.lp[2], s.lpe, s.lpm, 'lp', 'lpe', 'lpm')}
                         </div>
                     </div>
                 </details>
-
                 <details ${openRel} class="${disClass}" ${disAttr}>
                     <summary>Release / Off Options</summary>
                     <div style="padding-top:5px;">
                         ${mkInputs(s.l[0], s.l[1], s.l[2], s.le, s.lm, 'l', 'le', 'lm')}
                     </div>
-                </details>a
-                
+                </details>
             </div>`;
         });
         document.getElementById('sws').innerHTML = html;
