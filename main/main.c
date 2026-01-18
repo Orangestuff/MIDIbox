@@ -22,7 +22,7 @@
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include "esp_sleep.h" // NEW: Required for Deep Sleep
-
+#include "driver/rtc_io.h"
 // --- ADC Headers ---
 #include "esp_adc/adc_oneshot.h"
 
@@ -39,7 +39,7 @@ static const char *TAG = "MIDI_PEDAL";
 #define SWITCH_COUNT 8
 #define BANK_COUNT 4
 #define LONG_PRESS_MS 1200
-#define DEEP_SLEEP_TIMEOUT_MS 300000 // NEW: 5 Minutes
+#define DEEP_SLEEP_TIMEOUT_MS 30000 //30000 NEW: 5 Minutes
 #define MIDI_NOTE_OFF 128
 #define MIDI_NOTE_ON  144
 #define MIDI_CC       176
@@ -52,7 +52,7 @@ static const char *TAG = "MIDI_PEDAL";
 // --- EXPRESSION PEDAL CONFIG ---
 #define EX_PEDAL_CHANNEL ADC_CHANNEL_2 
 #define EX_SMOOTH_SIZE   10
-#define EXP_HYSTERESIS   15
+#define EXP_HYSTERESIS   20
 
 // --- BATTERY CONFIG (GPIO 7 / ADC1) ---
 #define BAT_ADC_CHANNEL ADC_CHANNEL_6 
@@ -128,6 +128,8 @@ typedef struct {
     uint8_t global_brightness;
     uint8_t sw6_cycle_rev;
     uint8_t sw7_cycle_fwd;
+    uint8_t deep_sleep_en; 
+    uint8_t deep_sleep_mins; 
     bank_cfg_t banks[BANK_COUNT];
 } device_cfg_t; 
 
@@ -677,7 +679,8 @@ esp_err_t get_json(httpd_req_t *req) {
     cJSON_AddBoolToObject(root, "cyc_rev", (dev_cfg.sw6_cycle_rev == 1)); 
     cJSON_AddBoolToObject(root, "cyc_fwd", (dev_cfg.sw7_cycle_fwd == 1)); 
     cJSON_AddNumberToObject(root, "brightness", dev_cfg.global_brightness);
-    
+    cJSON_AddBoolToObject(root, "ds_en", (dev_cfg.deep_sleep_en == 1));
+    cJSON_AddNumberToObject(root, "ds_min", dev_cfg.deep_sleep_mins);
     // Output WiFi
     cJSON *wifi = cJSON_CreateObject(); 
     cJSON_AddStringToObject(wifi, "ssid", w_cfg.ssid); 
@@ -840,7 +843,13 @@ esp_err_t post_save(httpd_req_t *req) {
         cJSON *bri = cJSON_GetObjectItem(root, "brightness"); 
         if (bri) dev_cfg.global_brightness = bri->valueint;
         
-        // REMOVED: Global exp parsing (now inside banks)
+        // --- PARSE POWER SETTINGS ---
+        cJSON *ds = cJSON_GetObjectItem(root, "ds_en");
+        if (ds) dev_cfg.deep_sleep_en = cJSON_IsTrue(ds) ? 1 : 0;
+
+        cJSON *dsm = cJSON_GetObjectItem(root, "ds_min");
+        if (dsm) dev_cfg.deep_sleep_mins = dsm->valueint;
+        // ----------------------------
 
         // Parse Banks
         cJSON *banks = cJSON_GetObjectItem(root, "banks");
@@ -920,48 +929,102 @@ esp_err_t post_save(httpd_req_t *req) {
 }
 
 // --- REPLACEMENT DEEP SLEEP FUNCTION ---
+// --- ROBUST DEEP SLEEP FUNCTION ---
 void enter_deep_sleep() {
-    ESP_LOGI(TAG, "Entering Deep Sleep...");
+    ESP_LOGI(TAG, "Preparing for Deep Sleep...");
     
-    // 1. Turn off LEDs (Save power immediately)
+    // 1. Turn off LEDs immediately
     for(int i=0; i<LED_COUNT; i++) set_pixel(i, 0, 0, 0);
     refresh_leds();
     
-    // 2. Configure ROW pins to be LOW
-    // We drive them LOW so that pressing a button connects the Column (High) to Row (Low)
+    // 2. Configure ROW pins (Outputs driving LOW)
+    // We freeze them in the LOW state using gpio_hold_en
     for (int i = 0; i < NUM_ROWS; i++) {
+        gpio_reset_pin(ROW_PINS[i]);
         gpio_set_direction(ROW_PINS[i], GPIO_MODE_OUTPUT);
         gpio_set_level(ROW_PINS[i], 0); 
+        gpio_hold_en(ROW_PINS[i]); 
     }
 
-    // 3. Prepare the Column Pins & Calculate Bitmask
+    // 3. Configure COL pins (Inputs with RTC Pull-ups)
     uint64_t col_mask = 0;
     for (int i = 0; i < NUM_COLS; i++) {
         const int pin = COL_PINS[i];
         
-        // Ensure Pull-up is enabled (so it stays HIGH until pressed)
-        gpio_set_direction(pin, GPIO_MODE_INPUT);
-        gpio_pullup_en(pin);
-        gpio_pulldown_dis(pin);
+        // Initialize as RTC GPIO (Critical for S3 Deep Sleep)
+        rtc_gpio_init(pin);
+        rtc_gpio_set_direction(pin, RTC_GPIO_MODE_INPUT_ONLY);
         
-        // Add this pin to our mask
+        // Enable RTC Pull-up (Stays on during sleep)
+        rtc_gpio_pullup_en(pin);
+        rtc_gpio_pulldown_dis(pin);
+        
+        // Add to wakeup mask
         col_mask |= (1ULL << pin);
     }
 
-    // 4. Enable EXT1 Wakeup
-    // This tells the ESP32: "Wake up if ANY of the pins in 'col_mask' go LOW"
-    // Note: If you get an error here, check the "Alternative" below.
-    esp_sleep_enable_ext1_wakeup(col_mask, ESP_EXT1_WAKEUP_ANY_LOW);
-    
-    // 5. Enter Sleep
-    esp_deep_sleep_start();
+    // 4. STABILIZATION DELAY
+    // Give the RTC pull-ups time to charge the lines
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // 5. SAFETY CHECK: Is a button currently pressed?
+    bool unsafe_to_sleep = false;
+    for (int i = 0; i < NUM_COLS; i++) {
+        // We use rtc_gpio_get_level now since we switched mux to RTC
+        if (rtc_gpio_get_level(COL_PINS[i]) == 0) {
+            ESP_LOGW(TAG, "ABORT SLEEP: Pin %d is LOW.", COL_PINS[i]);
+            unsafe_to_sleep = true;
+        }
+    }
+
+    if (!unsafe_to_sleep) {
+        ESP_LOGI(TAG, "Pins stable. Sleeping...");
+        
+        // Keep GPIOs held during sleep
+        gpio_deep_sleep_hold_en();
+        
+        // Enable Wakeup
+        esp_sleep_enable_ext1_wakeup(col_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+        esp_deep_sleep_start();
+    } else {
+        ESP_LOGW(TAG, "Sleep Aborted. Resetting activity timer.");
+        
+        // Release Row Holds so the pedal works again
+        for (int i = 0; i < NUM_ROWS; i++) gpio_hold_dis(ROW_PINS[i]);
+        
+        // Switch Cols back to Digital function (Optional, but good practice)
+        for (int i = 0; i < NUM_COLS; i++) rtc_gpio_deinit(COL_PINS[i]);
+
+        last_activity_time = (uint32_t)(esp_timer_get_time() / 1000);
+    }
 }
 
 void app_main(void) {
-    vTaskDelay(pdMS_TO_TICKS(3000)); 
+    // 1. CRITICAL: Release holds so we can use the pins immediately
+    gpio_hold_dis(GPIO_NUM_12); // Row 1
+    gpio_hold_dis(GPIO_NUM_13); // Row 2
+    
+    // Deinit RTC on columns to hand control back to the Digital Mux
+    rtc_gpio_deinit(GPIO_NUM_4);
+    rtc_gpio_deinit(GPIO_NUM_5);
+    rtc_gpio_deinit(GPIO_NUM_6);
+    rtc_gpio_deinit(GPIO_NUM_8);
 
+    // --- WAKEUP DIAGNOSTICS ---
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    if (cause == ESP_SLEEP_WAKEUP_EXT1) {
+        uint64_t mask = esp_sleep_get_ext1_wakeup_status();
+        int pin = __builtin_ffsll(mask) - 1;
+        ESP_LOGI(TAG, "WAKEUP: Woke from Deep Sleep! Trigger Pin: GPIO %d", pin);
+    } else {
+        ESP_LOGI(TAG, "WAKEUP: Normal Boot / Reset (Reason: %d)", cause);
+    }
+    
     esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) { nvs_flash_erase(); nvs_flash_init(); }
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) { 
+        nvs_flash_erase(); 
+        nvs_flash_init(); 
+    }
 
     nvs_handle_t h; 
     bool load_dev_success = false, load_wifi_success = false;
@@ -976,18 +1039,24 @@ void app_main(void) {
             nvs_commit(h);
         }
         size_t sz = 0;
-        if (nvs_get_blob(h, "dev_cfg", NULL, &sz) == ESP_OK && sz == sizeof(dev_cfg)) { nvs_get_blob(h, "dev_cfg", (void*)&dev_cfg, &sz); load_dev_success = true; }
+        if (nvs_get_blob(h, "dev_cfg", NULL, &sz) == ESP_OK && sz == sizeof(dev_cfg)) { 
+            nvs_get_blob(h, "dev_cfg", (void*)&dev_cfg, &sz); 
+            load_dev_success = true; 
+        }
         size_t w_sz = sizeof(w_cfg);
-        if (nvs_get_blob(h, "w_cfg", &w_cfg, &w_sz) == ESP_OK && w_sz == sizeof(w_cfg)) { load_wifi_success = true; }
+        if (nvs_get_blob(h, "w_cfg", &w_cfg, &w_sz) == ESP_OK && w_sz == sizeof(w_cfg)) { 
+            load_wifi_success = true; 
+        }
         uint8_t mode = 0;
-        if (nvs_get_u8(h, "wifi_mode", &mode) == ESP_OK) { is_wifi_on = (mode == 1); }
+        if (nvs_get_u8(h, "wifi_mode", &mode) == ESP_OK) { 
+            is_wifi_on = (mode == 1); 
+        }
         nvs_close(h);
     } 
     // --- IDENTITY MANAGEMENT END ---
 
     if (!load_dev_success) {
-        dev_cfg.current_bank = 0; dev_cfg.sw6_cycle_rev = 0; dev_cfg.sw7_cycle_fwd = 0; dev_cfg.global_brightness = 127;
-        
+        dev_cfg.current_bank = 0; dev_cfg.sw6_cycle_rev = 0; dev_cfg.sw7_cycle_fwd = 0; dev_cfg.global_brightness = 127; dev_cfg.deep_sleep_en = 1; dev_cfg.deep_sleep_mins = 5;
         // Loop through all banks to init switches AND expression defaults
         for(int b=0; b<BANK_COUNT; b++) {
             // Default Switches
@@ -1004,7 +1073,8 @@ void app_main(void) {
     }
     if (!load_wifi_success) { strcpy(w_cfg.ssid, "SSID"); strcpy(w_cfg.pass, "Password"); }
 
-    save_queue = xQueueCreate(1, sizeof(uint8_t)); xTaskCreate(nvs_save_task, "nvs_save", 3072, NULL, 1, NULL);
+    save_queue = xQueueCreate(1, sizeof(uint8_t)); 
+    xTaskCreate(nvs_save_task, "nvs_save", 3072, NULL, 1, NULL);
     
     // Init GPIO
     for(int i=0; i<NUM_ROWS; i++) {
@@ -1019,9 +1089,6 @@ void app_main(void) {
     }
     
     // --- RESET IDENTITY (COMBO BTN 5 + BTN 8 ON BOOT) ---
-    // Manually Scan Matrix
-    // Btn 5 is Index 4 (Row 1, Col 0) -> Row Pin[1], Col Pin[0]
-    // Btn 8 is Index 7 (Row 1, Col 3) -> Row Pin[1], Col Pin[3]
     bool btn5_pressed = false;
     bool btn8_pressed = false;
     
@@ -1039,7 +1106,10 @@ void app_main(void) {
             nvs_set_blob(h, "bt_mac", current_mac_addr, sizeof(current_mac_addr));
             nvs_commit(h); nvs_close(h);
         }
-        rmt_config_t config = RMT_DEFAULT_CONFIG_TX(LED_DATA_PIN, RMT_CHANNEL_0); config.clk_div = 4; rmt_config(&config); rmt_driver_install(config.channel, 0, 0);
+        rmt_config_t config = RMT_DEFAULT_CONFIG_TX(LED_DATA_PIN, RMT_CHANNEL_0); 
+        config.clk_div = 4; 
+        rmt_config(&config); 
+        rmt_driver_install(config.channel, 0, 0);
         // Flash Purple to confirm
         for(int k=0; k<10; k++) { 
             for(int j=0; j<LED_COUNT; j++) set_pixel(j, 255, 0, 255);
@@ -1049,17 +1119,26 @@ void app_main(void) {
             refresh_leds();
             vTaskDelay(pdMS_TO_TICKS(100)); 
         }
+        // De-init RMT so midi_task can load it properly later
+        rmt_driver_uninstall(config.channel);
     }
 
     init_battery(); 
     init_expression_pedal();
 
-    tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG(); tusb_cfg.descriptor.string = s_str_desc; tusb_cfg.descriptor.string_count = 5; tusb_cfg.descriptor.full_speed_config = s_midi_cfg_desc;
+    tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG(); 
+    tusb_cfg.descriptor.string = s_str_desc; 
+    tusb_cfg.descriptor.string_count = 5; 
+    tusb_cfg.descriptor.full_speed_config = s_midi_cfg_desc;
     tinyusb_driver_install(&tusb_cfg);
 
-    s_wifi_event_group = xEventGroupCreate(); esp_netif_init(); esp_event_loop_create_default();
-    esp_netif_create_default_wifi_sta(); esp_netif_create_default_wifi_ap();
-    wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT(); esp_wifi_init(&wcfg);
+    s_wifi_event_group = xEventGroupCreate(); 
+    esp_netif_init(); 
+    esp_event_loop_create_default();
+    esp_netif_create_default_wifi_sta(); 
+    esp_netif_create_default_wifi_ap();
+    wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT(); 
+    esp_wifi_init(&wcfg);
     esp_wifi_set_ps(WIFI_PS_NONE);
 
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL);
@@ -1071,7 +1150,11 @@ void app_main(void) {
         is_wifi_on = true; 
     }
 
-    if (is_wifi_on) { xTaskCreatePinnedToCore(wifi_init_task, "wifi_init", 4096, NULL, 10, NULL, 1); } else { init_ble_midi(); }
+    if (is_wifi_on) { 
+        xTaskCreatePinnedToCore(wifi_init_task, "wifi_init", 4096, NULL, 10, NULL, 1); 
+    } else { 
+        init_ble_midi(); 
+    }
 
     xTaskCreatePinnedToCore(midi_task, "midi", 4096, NULL, 5, NULL, 0);
 }
@@ -1383,9 +1466,18 @@ void midi_task(void *pv) {
                 update_status_leds(g_bat_voltage, dev_cfg.current_bank, sw_toggled_on[dev_cfg.current_bank], button_state);
             }
 
-            // --- DEEP SLEEP CHECK ---
-            if ((now_ms - last_activity_time) > DEEP_SLEEP_TIMEOUT_MS) {
-                enter_deep_sleep();
+// --- DEEP SLEEP CHECK ---
+            // Only sleep if Enabled (deep_sleep_en == 1)
+            if (dev_cfg.deep_sleep_en) {
+                // Convert minutes to milliseconds
+                uint32_t timeout = dev_cfg.deep_sleep_mins * 60 * 1000;
+                
+                // Safety: Minimum 1 minute to prevent getting locked out
+                if (timeout < 60000) timeout = 60000; 
+
+                if ((now_ms - last_activity_time) > timeout) {
+                    enter_deep_sleep();
+                }
             }
         }
         const TickType_t delay = pdMS_TO_TICKS(1);
