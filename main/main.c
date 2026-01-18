@@ -21,6 +21,7 @@
 #include "esp_random.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include "esp_sleep.h" // NEW: Required for Deep Sleep
 
 // --- ADC Headers ---
 #include "esp_adc/adc_oneshot.h"
@@ -38,6 +39,7 @@ static const char *TAG = "MIDI_PEDAL";
 #define SWITCH_COUNT 8
 #define BANK_COUNT 4
 #define LONG_PRESS_MS 1200
+#define DEEP_SLEEP_TIMEOUT_MS 300000 // NEW: 5 Minutes
 #define MIDI_NOTE_OFF 128
 #define MIDI_NOTE_ON  144
 #define MIDI_CC       176
@@ -50,6 +52,7 @@ static const char *TAG = "MIDI_PEDAL";
 // --- EXPRESSION PEDAL CONFIG ---
 #define EX_PEDAL_CHANNEL ADC_CHANNEL_2 
 #define EX_SMOOTH_SIZE   10
+#define EXP_HYSTERESIS   15
 
 // --- BATTERY CONFIG (GPIO 7 / ADC1) ---
 #define BAT_ADC_CHANNEL ADC_CHANNEL_6 
@@ -85,9 +88,9 @@ static volatile bool is_scanning = false;
 static esp_bd_addr_t current_mac_addr; 
 static adc_oneshot_unit_handle_t adc_handle = NULL;
 static float smoothed_bat = 0.0f;
+static uint32_t last_activity_time = 0; // NEW: Activity Timer
 
-// --- Expression Pedal Globals ---
-volatile int g_exp_raw_val = 0; // GLOBAL FOR UI CALIBRATION
+volatile int g_exp_raw_val = 0; 
 
 typedef struct { char ssid[32]; char pass[64]; } wifi_cfg_t;
 
@@ -96,9 +99,9 @@ typedef struct { char ssid[32]; char pass[64]; } wifi_cfg_t;
 typedef struct {
     uint8_t chan;
     uint8_t cc;
-    uint16_t min;   // Calibration Min (ADC Value)
-    uint16_t max;   // Calibration Max (ADC Value)
-    uint8_t curve;  // 0=Linear, 1=Exp (Slow), 2=Log (Fast)
+    uint16_t min;   
+    uint16_t max;   
+    uint8_t curve;  
 } exp_cfg_t;
 
 typedef struct { 
@@ -117,7 +120,7 @@ typedef struct {
 
 typedef struct {
     sw_cfg_t switches[SWITCH_COUNT];
-    exp_cfg_t exp; // Expression settings are now PER BANK
+    exp_cfg_t exp; 
 } bank_cfg_t;
 
 typedef struct {
@@ -126,7 +129,7 @@ typedef struct {
     uint8_t sw6_cycle_rev;
     uint8_t sw7_cycle_fwd;
     bank_cfg_t banks[BANK_COUNT];
-} device_cfg_t; // Corrected Name
+} device_cfg_t; 
 
 wifi_cfg_t w_cfg;
 volatile device_cfg_t dev_cfg; 
@@ -220,27 +223,21 @@ uint8_t apply_curve(float normalized, uint8_t type) {
     if (val > 1.0f) val = 1.0f;
 
     switch(type) {
-        case 1: // Exp (Slow Start / Volume Swell) -> y = x^2
-            val = val * val;
-            break;
-        case 2: // Log (Fast Start) -> y = sqrt(x)
-            val = sqrtf(val); // Requires #include <math.h>
-            break;
-        case 0: // Linear -> y = x
-        default:
-            break;
+        case 1: val = val * val; break;
+        case 2: val = sqrtf(val); break;
+        case 0: default: break;
     }
     return (uint8_t)(val * 127.0f);
 }
 
-// Noise threshold (Adjust 10-30 if still jittery)
-#define EXP_HYSTERESIS 25
-
-void process_expression_pedal() {
-    // 1. Get Config
+// Change the function signature to accept the time
+void process_expression_pedal(uint32_t now_ms) {
     volatile exp_cfg_t *exp = &dev_cfg.banks[dev_cfg.current_bank].exp;
 
-    // 2. Read ADC (Oversampling)
+    // ... [Keep ADC reading, Hysteresis, Smoothing, and Normalization code exactly the same] ...
+    // ... [Copy lines 240-275 from your current file here] ...
+    
+    // Oversampling
     uint32_t sum = 0;
     int sample = 0;
     for(int i=0; i<4; i++) {
@@ -249,40 +246,31 @@ void process_expression_pedal() {
     }
     int raw = sum / 4;
 
-    // 3. Hysteresis
+    // Hysteresis
     static int stable_raw = 0;
-    if (raw > (stable_raw + EXP_HYSTERESIS)) {
-        stable_raw = raw - EXP_HYSTERESIS; 
-    } 
-    else if (raw < (stable_raw - EXP_HYSTERESIS)) {
-        stable_raw = raw + EXP_HYSTERESIS; 
-    }
+    if (raw > (stable_raw + EXP_HYSTERESIS)) { stable_raw = raw - EXP_HYSTERESIS; } 
+    else if (raw < (stable_raw - EXP_HYSTERESIS)) { stable_raw = raw + EXP_HYSTERESIS; }
 
-    // 4. Smoothing
+    // Smoothing
     static float smooth_raw = 0;
     smooth_raw = (smooth_raw * 0.90f) + ((float)stable_raw * 0.10f);
     int current_val = (int)smooth_raw;
 
-    // --- FIX: Update UI Global continuously (Outside the MIDI logic) ---
-    // This ensures you see the REAL raw value even if you go past Min/Max
+    // Update UI Global
     g_exp_raw_val = current_val; 
-    // ------------------------------------------------------------------
 
-    // 5. Normalize
+    // Normalize
     float norm = 0.0f;
     if (exp->max > exp->min) {
         norm = (float)(current_val - exp->min) / (float)(exp->max - exp->min);
     } else {
         norm = (float)(exp->min - current_val) / (float)(exp->min - exp->max);
     }
-    
     if (norm < 0.0f) norm = 0.0f;
     if (norm > 1.0f) norm = 1.0f;
 
-    // 6. Curve
     uint8_t midi_val = apply_curve(norm, exp->curve);
 
-    // 7. Send MIDI (Only if changed)
     static uint8_t last_exp_val = 255;
     static uint8_t last_bank_idx = 255; 
 
@@ -290,6 +278,9 @@ void process_expression_pedal() {
         send_midi_msg(176, exp->chan, exp->cc, midi_val); 
         last_exp_val = midi_val;
         last_bank_idx = dev_cfg.current_bank;
+        
+        // FIX: Use the synchronized time passed from the main loop
+        last_activity_time = now_ms;
     }
 }
 
@@ -928,6 +919,44 @@ esp_err_t post_save(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// --- REPLACEMENT DEEP SLEEP FUNCTION ---
+void enter_deep_sleep() {
+    ESP_LOGI(TAG, "Entering Deep Sleep...");
+    
+    // 1. Turn off LEDs (Save power immediately)
+    for(int i=0; i<LED_COUNT; i++) set_pixel(i, 0, 0, 0);
+    refresh_leds();
+    
+    // 2. Configure ROW pins to be LOW
+    // We drive them LOW so that pressing a button connects the Column (High) to Row (Low)
+    for (int i = 0; i < NUM_ROWS; i++) {
+        gpio_set_direction(ROW_PINS[i], GPIO_MODE_OUTPUT);
+        gpio_set_level(ROW_PINS[i], 0); 
+    }
+
+    // 3. Prepare the Column Pins & Calculate Bitmask
+    uint64_t col_mask = 0;
+    for (int i = 0; i < NUM_COLS; i++) {
+        const int pin = COL_PINS[i];
+        
+        // Ensure Pull-up is enabled (so it stays HIGH until pressed)
+        gpio_set_direction(pin, GPIO_MODE_INPUT);
+        gpio_pullup_en(pin);
+        gpio_pulldown_dis(pin);
+        
+        // Add this pin to our mask
+        col_mask |= (1ULL << pin);
+    }
+
+    // 4. Enable EXT1 Wakeup
+    // This tells the ESP32: "Wake up if ANY of the pins in 'col_mask' go LOW"
+    // Note: If you get an error here, check the "Alternative" below.
+    esp_sleep_enable_ext1_wakeup(col_mask, ESP_EXT1_WAKEUP_ANY_LOW);
+    
+    // 5. Enter Sleep
+    esp_deep_sleep_start();
+}
+
 void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(3000)); 
 
@@ -1165,6 +1194,9 @@ void midi_task(void *pv) {
     uint32_t flash_end_time = 0;      
     int flash_source_sw_idx = -1; 
 
+    // INIT ACTIVITY TIMER
+    if (last_activity_time == 0) last_activity_time = (uint32_t)(esp_timer_get_time() / 1000);
+
     while(1) {
         int64_t now_us = esp_timer_get_time();
         uint32_t now_ms = (uint32_t)(now_us / 1000);
@@ -1185,6 +1217,9 @@ void midi_task(void *pv) {
                     if ((now_ms - last_debounce_time[sw_idx]) > 50) { 
                         button_state[sw_idx] = pressed;
                         last_debounce_time[sw_idx] = now_ms;
+                        
+                        // ACTIVITY DETECTED
+                        last_activity_time = now_ms;
                     }
                 }
             }
@@ -1243,7 +1278,7 @@ void midi_task(void *pv) {
                     bool is_cycling = false;
 
                     // A. Bank Cycle / Direct Bank
-                    if (cfg->p_type >= 250) { 
+                    if (cfg->p_type >= 250 && cfg->p_type <= 255) { 
                         if (cfg->p_type == 250) dev_cfg.current_bank = (dev_cfg.current_bank - 1 + BANK_COUNT) % BANK_COUNT; 
                         else if (cfg->p_type == 251) dev_cfg.current_bank = (dev_cfg.current_bank + 1) % BANK_COUNT; 
                         else {
@@ -1323,7 +1358,7 @@ void midi_task(void *pv) {
         // ============================================================
         if (now_ms - last_slow_task_time > 10) {
             last_slow_task_time = now_ms;
-            process_expression_pedal();
+            process_expression_pedal(now_ms);
             read_battery();
 
             if (now_ms < flash_end_time) {
@@ -1346,6 +1381,11 @@ void midi_task(void *pv) {
             else {
                 flash_source_sw_idx = -1; 
                 update_status_leds(g_bat_voltage, dev_cfg.current_bank, sw_toggled_on[dev_cfg.current_bank], button_state);
+            }
+
+            // --- DEEP SLEEP CHECK ---
+            if ((now_ms - last_activity_time) > DEEP_SLEEP_TIMEOUT_MS) {
+                enter_deep_sleep();
             }
         }
         const TickType_t delay = pdMS_TO_TICKS(1);
