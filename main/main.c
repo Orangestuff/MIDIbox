@@ -52,7 +52,7 @@ static const char *TAG = "MIDI_PEDAL";
 // --- EXPRESSION PEDAL CONFIG ---
 #define EX_PEDAL_CHANNEL ADC_CHANNEL_2 
 #define EX_SMOOTH_SIZE   10
-#define EXP_HYSTERESIS   20
+#define EXP_HYSTERESIS   15
 
 // --- BATTERY CONFIG (GPIO 7 / ADC1) ---
 #define BAT_ADC_CHANNEL ADC_CHANNEL_6 
@@ -140,9 +140,18 @@ static EventGroupHandle_t s_wifi_event_group;
 static httpd_handle_t srv = NULL;
 static bool is_wifi_on = false;
 
+//Preset Struct
+#define MAX_PRESETS 5
+typedef struct {
+    char name[32];
+    bool active;
+    device_cfg_t data; // Stores the entire device state
+} preset_t;
+preset_t presets[MAX_PRESETS];
 const uint8_t BANK_COLORS[4][3] = { {255,0,0}, {0,255,0}, {0,0,255}, {255,0,255} };
 
 // Forward Declarations
+void nvs_save_presets_to_flash();
 void midi_task(void *pv);
 void restart_task(void *p);
 void wifi_init_task(void *pv); 
@@ -165,7 +174,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
 enum { ITF_NUM_MIDI = 0, ITF_NUM_MIDI_STREAMING, ITF_COUNT };
 enum { EPNUM_MIDI = 1 };
 #define TUSB_DESCRIPTOR_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_MIDI_DESC_LEN)
-static const char* s_str_desc[5] = {(char[]){0x09, 0x04}, "TinyUSB", "ESP32 MIDI Pedal", "123456", "MIDI Interface"};
+static const char* s_str_desc[5] = {(char[]){0x09, 0x04}, "TinyUSB", "MidiBox", "123456", "MIDI Interface"};
 static const uint8_t s_midi_cfg_desc[] = {
     TUD_CONFIG_DESCRIPTOR(1, ITF_COUNT, 0, TUSB_DESCRIPTOR_TOTAL_LEN, 0x00, 100),
     TUD_MIDI_DESCRIPTOR(ITF_NUM_MIDI, 4, EPNUM_MIDI, 0x80 | EPNUM_MIDI, 64),
@@ -309,7 +318,7 @@ static esp_ble_adv_params_t adv_params = {
 };
 
 static uint8_t raw_adv_data[3 + 18] = { 0x02, 0x01, 0x06, 0x11, 0x07 }; 
-static uint8_t raw_scan_rsp_data[] = { 0x0B, 0x09, 'E', 'S', 'P', '3', '2', '_', 'M', 'I', 'D', 'I' };
+static uint8_t raw_scan_rsp_data[] = { 0x08, 0x09, 'M', 'I', 'D', 'I', 'B', '0', 'X'};
 
 #define CHAR_DECLARATION_SIZE   (sizeof(uint8_t))
 static const uint16_t primary_service_uuid = ESP_GATT_UUID_PRI_SERVICE;
@@ -340,7 +349,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
     if (event == ESP_GATTS_REG_EVT) {
         current_gatts_if = gatts_if;
         esp_ble_gap_set_rand_addr(current_mac_addr);
-        esp_ble_gap_set_device_name("ESP32_MIDI");
+        esp_ble_gap_set_device_name("MidiBox");
         memcpy(&raw_adv_data[5], midi_service_uuid, 16);
         esp_ble_gap_config_adv_data_raw(raw_adv_data, sizeof(raw_adv_data));
         esp_ble_gap_config_scan_rsp_data_raw(raw_scan_rsp_data, sizeof(raw_scan_rsp_data));
@@ -414,14 +423,99 @@ void send_ble_midi_packet(uint8_t type, uint8_t chan, uint8_t val, uint8_t veloc
 // ==========================================================
 //                  CORE LOGIC
 // ==========================================================
+// --- PRESET API HANDLERS ---
+// GET: List all presets
+esp_err_t get_presets_list(httpd_req_t *req) {
+    cJSON *root = cJSON_CreateArray();
+    for(int i=0; i<MAX_PRESETS; i++) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddNumberToObject(item, "id", i);
+        cJSON_AddStringToObject(item, "name", presets[i].active ? presets[i].name : "--- Empty ---");
+        cJSON_AddBoolToObject(item, "active", presets[i].active);
+        cJSON_AddItemToArray(root, item);
+    }
+    char *out = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out);
+    free(out);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
 
+// POST: Save Current Config to a Preset Slot
+esp_err_t post_preset_save(httpd_req_t *req) {
+    char buf[100]; // Payload: {"id": 0, "name": "My Preset"}
+    int ret = httpd_req_recv(req, buf, sizeof(buf));
+    if (ret <= 0) return ESP_FAIL;
+    buf[ret] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    if(root) {
+        cJSON *id = cJSON_GetObjectItem(root, "id");
+        cJSON *name = cJSON_GetObjectItem(root, "name");
+        
+        if(id && name && id->valueint >= 0 && id->valueint < MAX_PRESETS) {
+            int i = id->valueint;
+            
+            // 1. Update Metadata
+            strncpy(presets[i].name, name->valuestring, 31);
+            presets[i].active = true;
+            
+            // 2. SNAPSHOT: Copy current live config into the preset struct
+            // Note: We cast away volatile for the memcpy
+            memcpy(&presets[i].data, (void*)&dev_cfg, sizeof(device_cfg_t));
+            
+            // 3. Save to NVS
+            nvs_save_presets_to_flash();
+            ESP_LOGI(TAG, "Preset %d ('%s') Saved", i, presets[i].name);
+        }
+        cJSON_Delete(root);
+    }
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
+
+// POST: Load a Preset Slot into Active Config
+esp_err_t post_preset_load(httpd_req_t *req) {
+    char buf[20]; // Payload: "0" (Just the ID)
+    int ret = httpd_req_recv(req, buf, sizeof(buf));
+    if (ret <= 0) return ESP_FAIL;
+    buf[ret] = '\0';
+    
+    int i = atoi(buf);
+    if(i >= 0 && i < MAX_PRESETS && presets[i].active) {
+        // 1. OVERWRITE Live Config
+        memcpy((void*)&dev_cfg, &presets[i].data, sizeof(device_cfg_t));
+        
+        // 2. Persist the change (so it survives reboot)
+        uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0);
+        
+        ESP_LOGI(TAG, "Preset %d Loaded", i);
+        httpd_resp_sendstr(req, "OK");
+    } else {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Invalid Slot");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
 void start_webserver() {
     if (srv != NULL) return;
     httpd_config_t hcfg = HTTPD_DEFAULT_CONFIG(); 
     hcfg.stack_size = 12288; 
+    hcfg.max_uri_handlers = 12;
     if(httpd_start(&srv, &hcfg) == ESP_OK) {
-        httpd_uri_t u[] = { {.uri="/",.method=HTTP_GET,.handler=get_page}, {.uri="/api/settings",.method=HTTP_GET,.handler=get_json}, {.uri="/api/status",.method=HTTP_GET,.handler=get_status}, {.uri="/api/save",.method=HTTP_POST,.handler=post_save}, {.uri="/api/set_bank",.method=HTTP_POST,.handler=post_set_bank}, {.uri="/api/save_wifi",.method=HTTP_POST,.handler=post_save_wifi}, {.uri="/api/scan",.method=HTTP_GET,.handler=get_wifi_scan} };
-        for(int i=0; i < 7; i++) httpd_register_uri_handler(srv, &u[i]);
+        httpd_uri_t u[] = { {.uri="/",.method=HTTP_GET,.handler=get_page},
+        {.uri="/api/settings",.method=HTTP_GET,.handler=get_json},
+        {.uri="/api/status",.method=HTTP_GET,.handler=get_status},
+        {.uri="/api/save",.method=HTTP_POST,.handler=post_save},
+        {.uri="/api/set_bank",.method=HTTP_POST,.handler=post_set_bank},
+        {.uri="/api/save_wifi",.method=HTTP_POST,.handler=post_save_wifi},
+        {.uri="/api/scan",.method=HTTP_GET,.handler=get_wifi_scan},
+        {.uri="/api/presets",.method=HTTP_GET,.handler=get_presets_list},
+        {.uri="/api/preset/save",.method=HTTP_POST,.handler=post_preset_save},
+        {.uri="/api/preset/load",.method=HTTP_POST,.handler=post_preset_load}
+        };
+        for(int i=0; i < 10; i++) httpd_register_uri_handler(srv, &u[i]);
         ESP_LOGI(TAG, "Web Server Started");
     }
 }
@@ -471,10 +565,10 @@ void wifi_init_task(void *pv) {
         memset(&ap_cfg, 0, sizeof(wifi_config_t));
 
         // 2. Set Robust Parameters (WPA2 + Channel 6)
-        strlcpy((char*)ap_cfg.ap.ssid, "MidiPedal_Config", sizeof(ap_cfg.ap.ssid));
+        strlcpy((char*)ap_cfg.ap.ssid, "MidiBox_Config", sizeof(ap_cfg.ap.ssid));
         strlcpy((char*)ap_cfg.ap.password, "12345678", sizeof(ap_cfg.ap.password)); // Simple password
         ap_cfg.ap.channel = 6;                       // Channel 6 is often clearer than 1
-        ap_cfg.ap.ssid_len = strlen("MidiPedal_Config");
+        ap_cfg.ap.ssid_len = strlen("MidiBox_Config");
         ap_cfg.ap.max_connection = 4;
         ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;     // Phones prefer WPA2 over Open
         ap_cfg.ap.pmf_cfg.required = false;          // Keep PMF off for compatibility
@@ -488,7 +582,7 @@ void wifi_init_task(void *pv) {
         ESP_ERROR_CHECK(esp_wifi_start());
         esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
         
-        ESP_LOGI(TAG, "AP Started. Connect to 'MidiPedal_Config' (20MHz Mode)");
+        ESP_LOGI(TAG, "AP Started. Connect to 'MidiBox_Config' (20MHz Mode)");
         start_webserver();
     }
     vTaskDelete(NULL);
@@ -998,7 +1092,40 @@ void enter_deep_sleep() {
         last_activity_time = (uint32_t)(esp_timer_get_time() / 1000);
     }
 }
+void nvs_save_presets_to_flash() {
+    nvs_handle_t h;
+    if(nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) {
+        // We save each preset as a separate blob to be safe with size
+        for(int i=0; i<MAX_PRESETS; i++) {
+            char key[16]; snprintf(key, sizeof(key), "pre_%d", i);
+            nvs_set_blob(h, key, &presets[i], sizeof(preset_t));
+        }
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
 
+void nvs_load_presets_from_flash() {
+    nvs_handle_t h;
+    if(nvs_open("storage", NVS_READONLY, &h) == ESP_OK) {
+        for(int i=0; i<MAX_PRESETS; i++) {
+            char key[16]; snprintf(key, sizeof(key), "pre_%d", i);
+            size_t sz = sizeof(preset_t);
+            // If blob exists, load it. Else mark as inactive.
+            if(nvs_get_blob(h, key, &presets[i], &sz) != ESP_OK) {
+                presets[i].active = false;
+                sprintf(presets[i].name, "Empty Slot %d", i+1);
+            }
+        }
+        nvs_close(h);
+    } else {
+        // Init empty
+        for(int i=0; i<MAX_PRESETS; i++) {
+            presets[i].active = false;
+            sprintf(presets[i].name, "Empty Slot %d", i+1);
+        }
+    }
+}
 void app_main(void) {
     // 1. CRITICAL: Release holds so we can use the pins immediately
     gpio_hold_dis(GPIO_NUM_12); // Row 1
@@ -1054,7 +1181,7 @@ void app_main(void) {
         nvs_close(h);
     } 
     // --- IDENTITY MANAGEMENT END ---
-
+    nvs_load_presets_from_flash();
     if (!load_dev_success) {
         dev_cfg.current_bank = 0; dev_cfg.sw6_cycle_rev = 0; dev_cfg.sw7_cycle_fwd = 0; dev_cfg.global_brightness = 127; dev_cfg.deep_sleep_en = 1; dev_cfg.deep_sleep_mins = 5;
         // Loop through all banks to init switches AND expression defaults
