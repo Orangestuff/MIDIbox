@@ -7,7 +7,7 @@ A fully programmable, battery-powered MIDI Foot Controller based on the ESP32-S3
 ### Connectivity
 
 * **Dual MIDI Interface:** Works over **Bluetooth LE (BLE)** and **USB** simultaneously.
-* **Wireless Configuration:** Hosts a WiFi Access Point (`MidiPedal_Config`) for on-the-fly editing via any smartphone or laptop.
+* **Wireless Configuration:** Hosts a WiFi Access Point (`MidiBox_Config`) for on-the-fly editing via any smartphone or laptop.
 * **Unique Identity Generation:** Hold **Switch 5 + Switch 8** on boot to generate a new BLE MAC address (useful for resolving pairing conflicts).
 
 ### Control & Logic
