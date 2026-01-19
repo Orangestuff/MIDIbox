@@ -13,7 +13,7 @@ A fully programmable, battery-powered MIDI Foot Controller based on the ESP32-S3
 
 ### Control & Logic
 
-* **4 Programmable Banks:** Each bank stores unique settings for all 8 switches and the expression pedal.
+* **4 Programmable Banks:** Although the pedal has 8 physical footswitches, the software treats it as a 32-button controller divided into 4 "Pages" or "Banks". 
 * **Advanced Switch Actions:**
 * **Triggers:** Short Press, Long Press, and Release actions.
 * **Message Types:** Note On/Off, CC, PC, Bank Up/Down, Direct Bank Select.
