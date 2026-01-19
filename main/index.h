@@ -14,6 +14,7 @@
     .wifi-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ffa502; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
     .power-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #02ff0f; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
     .exp-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #e74c3c; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+    .preset-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ffffff; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
     
     .wifi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }
     
@@ -84,6 +85,15 @@
             <input type="number" id="ds_min" min="1" max="120" style="width:100%;" onchange="updGlob('ds_min', this.value)">
         </div>
     </div>
+    <div class="control-box">
+        <label style="font-size: 1em; color: white; white-space: nowrap;">LED Brightness</label>
+        <input type="range" id="bri_slider" min="1" max="255" oninput="updateBri(this.value)">
+        <span id="bri_val" style="font-weight: bold; width: 40px; text-align: right;">127</span>
+    </div>
+<div class="control-box">
+        <label style="font-size: 1em; color: white;">Battery Status</label>
+        <span id="bat_val" style="font-weight: bold; color: #00d1b2; font-size: 1.2em;">-- V</span>
+    </div>
 <div class='exp-card'>
         <h3 style="margin-top:0;">Expression Config (Bank <span id="exp_bank_num"></span>)</h3>
         
@@ -133,17 +143,21 @@
         </div>
     </div>
 
-    <div class="control-box">
-        <label style="font-size: 1em; color: white;">Battery Status</label>
-        <span id="bat_val" style="font-weight: bold; color: #00d1b2; font-size: 1.2em;">-- V</span>
+<div class='preset-card' style="border-left: 5px solid #9b59b6;">
+        <h3>Preset Manager</h3>
+        <div style="display:flex; gap:10px; margin-bottom:10px;">
+            <select id="preset_list" onchange="onPresetSelect()" style="flex-grow:1;">
+                <option value="-1">Loading...</option>
+            </select>
+            <button class="btn-cal" style="width:auto; background:#2ecc71;" onclick="loadPreset()">LOAD</button>
+        </div>
+        
+        <div style="display:flex; gap:10px; align-items:center; background:#252525; padding:10px; border-radius:5px;">
+            <label style="white-space:nowrap;">Save As:</label>
+            <input type="text" id="preset_name" placeholder="Enter Preset Name" maxlength="20">
+            <button class="btn-cal" style="width:auto; background:#e67e22;" onclick="savePreset()">SAVE</button>
+        </div>
     </div>
-
-    <div class="control-box">
-        <label style="font-size: 1em; color: white; white-space: nowrap;">LED Brightness</label>
-        <input type="range" id="bri_slider" min="1" max="255" oninput="updateBri(this.value)">
-        <span id="bri_val" style="font-weight: bold; width: 40px; text-align: right;">127</span>
-    </div>
-
     <div class="bank-bar">
         <button id="btn-b0" class="bank-btn" onclick="userSelBank(0)">Bank 1</button>
         <button id="btn-b1" class="bank-btn" onclick="userSelBank(1)">Bank 2</button>
@@ -162,6 +176,7 @@
     let fullData = null; 
     let curBank = 0;
     let liveExpVal = 0; 
+    let activePresetId = parseInt(localStorage.getItem('last_preset_id')) || 0;
 
     // 1. GENERATOR FOR SHORT PRESS (Includes Banks)
     function genMainTypes(val) {
@@ -220,6 +235,77 @@
         return mask;
     }
 
+    // --- PRESET LOGIC ---
+    let presetList = [];
+
+async function refreshPresets() {
+        try {
+            const r = await fetch('/api/presets');
+            presetList = await r.json();
+            const sel = document.getElementById('preset_list');
+            sel.innerHTML = "";
+            
+            // Add options
+            presetList.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.id;
+                opt.innerText = `${p.id + 1}: ${p.name}`;
+                sel.appendChild(opt);
+            });
+            
+            // FIX: Restore the selection state
+            sel.value = activePresetId;
+            
+            // Trigger select update to populate name box
+            onPresetSelect();
+        } catch(e) { console.log("Preset load err"); }
+    }
+
+    function onPresetSelect() {
+        const sel = document.getElementById('preset_list');
+        const id = parseInt(sel.value);
+        const preset = presetList.find(p => p.id === id);
+        if(preset) {
+            // If preset is active, suggest keeping its name. If empty, suggest "New Preset"
+            document.getElementById('preset_name').value = preset.active ? preset.name : `Preset ${id+1}`;
+        }
+    }
+
+    async function loadPreset() {
+        const id = document.getElementById('preset_list').value;
+        activePresetId = parseInt(id);
+        localStorage.setItem('last_preset_id', activePresetId);
+        if(confirm("Load this preset? Current unsaved changes will be lost.")) {
+            await fetch('/api/preset/load', { method:'POST', body: id });
+            // Reload the whole page configuration
+            load(); 
+            alert("Preset Loaded!");
+        }
+    }
+
+    async function savePreset() {
+        const id = parseInt(document.getElementById('preset_list').value);
+        const name = document.getElementById('preset_name').value;
+        
+        if(!name) return alert("Please enter a name");
+        activePresetId = id;
+        localStorage.setItem('last_preset_id', activePresetId);
+        // 1. First, SAVE the current UI state to the Main Config (RAM)
+        // This ensures what you see on screen is what gets snapshot
+        await save(); 
+
+        // 2. Then, tell ESP32 to copy Main Config -> Preset Slot
+        const payload = { id: id, name: name };
+        await fetch('/api/preset/save', {
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        
+        alert("Preset Saved!");
+        refreshPresets(); // Refresh list to show new name
+    }
+
     async function load() {
         try {
             const r = await fetch('/api/settings');
@@ -240,6 +326,7 @@
 
             render();
             updateBankClasses();
+            refreshPresets();
             setInterval(pollStatus, 800); 
         } catch (e) { console.error("Load failed", e); }
     }
@@ -360,6 +447,7 @@
         // Ensure exp object exists in JSON
         if (!bank.exp) bank.exp = {ch:0, cc:11, min:0, max:4095, crv:0};
         
+        document.getElementById('exp_bank_num').innerText = curBank + 1;
         document.getElementById('exp_chan').value = bank.exp.ch + 1;
         document.getElementById('exp_func').value = bank.exp.cc;
         document.getElementById('exp_min').value = bank.exp.min;
