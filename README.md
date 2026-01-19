@@ -128,7 +128,7 @@ idf.py build flash monitor
 ### 1. Basic Operation
 
 * **Power On:** The LEDs will flash the current Bank Color.
-* **Change Banks:** Use configured "Bank Up/Down" switches.
+* **Change Banks:** Use configured "Bank Up/Down" switches or bind banks directly.
 * *Bank 1: Red | Bank 2: Green | Bank 3: Blue | Bank 4: Purple*
 
 
@@ -142,7 +142,7 @@ idf.py build flash monitor
 ### 2. Configuration Mode (WiFi)
 
 1. If no known WiFi is found, the pedal broadcasts an Access Point:
-* **SSID:** `MidiPedal_Config`
+* **SSID:** `MidiBox_Config`
 * **Pass:** `12345678`
 
 
