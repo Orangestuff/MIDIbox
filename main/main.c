@@ -108,18 +108,7 @@ typedef struct {
     uint8_t p_type; uint8_t p_chan; uint8_t p_d1; uint8_t p_edge;
     uint8_t lp_type; uint8_t lp_chan; uint8_t lp_d1; 
     uint8_t l_type; uint8_t l_chan; uint8_t l_d1; 
-#ifndef INDEX_H
-#define INDEX_H
-
-    const char* INDEX_HTML = R"=====(
-    <!DOCTYPE html>
-    <html>
-    <head>
-    <meta charset='UTF-8'> <meta name='viewport' content='width=device-width, initial-scale=1'>
-    <style>
-    body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #121212; color: #e0e0e0; padding: 20px; max-width: 1200px; margin: auto; }
-    h2 { color: #00d1b2; text-align: center; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 30px; }
-
+    
     uint8_t p_excl; uint8_t p_master; 
     uint8_t lp_excl; uint8_t lp_master;
     uint8_t l_excl; uint8_t l_master;
@@ -216,11 +205,7 @@ void init_expression_pedal() {
         adc_oneshot_unit_init_cfg_t init_config = { .unit_id = BAT_ADC_UNIT };
         adc_oneshot_new_unit(&init_config, &adc_handle);
     }
-    .wifi-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ffa502; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-    .power-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #02ff0f; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-    .exp-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #e74c3c; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-    .preset-card { background: #1e1e1e; padding: 20px; border-radius: 10px; border-left: 5px solid #ffffff; margin-bottom: 30px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-
+    
     if (adc_handle) {
         adc_oneshot_chan_cfg_t config = {
             .bitwidth = ADC_BITWIDTH_12, 
@@ -262,8 +247,7 @@ void process_expression_pedal(uint32_t now_ms) {
 
     // ... [Keep ADC reading, Hysteresis, Smoothing, and Normalization code exactly the same] ...
     // ... [Copy lines 240-275 from your current file here] ...
-    .wifi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }
-
+    
     // Oversampling
     uint32_t sum = 0;
     int sample = 0;
@@ -318,9 +302,6 @@ static bool is_ble_connected = false;
 static uint16_t current_conn_id = 0;        
 static esp_gatt_if_t current_gatts_if = 0;
 static uint16_t midi_char_handle = 0; 
-    .bank-bar { display: flex; gap: 10px; margin-bottom: 20px; justify-content: center; }
-    .bank-btn { flex: 1; padding: 15px; background: #333; color: #aaa; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 1.1em; transition: 0.3s; text-transform: uppercase; border-bottom: 4px solid transparent; }
-    .bank-btn:hover { background: #444; }
 
 static const uint8_t midi_service_uuid[16] = { 0x00, 0xC7, 0xC4, 0x4E, 0xE3, 0x6C, 0x51, 0xA7, 0x33, 0x4B, 0xE8, 0xED, 0x5A, 0x0E, 0xB8, 0x03 };
 static const uint8_t midi_char_uuid[16]    = { 0xF3, 0x6B, 0x10, 0x9D, 0x66, 0xF2, 0xA9, 0xA1, 0x12, 0x41, 0x68, 0x38, 0xDB, 0xE5, 0x72, 0x77 };
@@ -405,9 +386,7 @@ void init_ble_midi() {
     esp_bt_controller_enable(ESP_BT_MODE_BLE); 
     esp_bluedroid_init(); 
     esp_bluedroid_enable(); 
-    .control-box { background: #333; padding: 15px; border-radius: 5px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; }
-    input[type=range] { width: 100%; margin: 0 15px; accent-color: #00d1b2; cursor: pointer; }
-
+    
     esp_ble_auth_req_t auth_req = ESP_LE_AUTH_BOND; 
     esp_ble_io_cap_t iocap = ESP_IO_CAP_NONE;
     uint8_t key_size = 16;
@@ -418,8 +397,7 @@ void init_ble_midi() {
     esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(uint8_t));
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(uint8_t));
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
-    #sws { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; }
-
+    
     esp_ble_gatts_register_callback(gatts_event_handler); 
     esp_ble_gap_register_callback(gap_event_handler); 
     esp_ble_gatts_app_register(0); 
@@ -496,8 +474,6 @@ esp_err_t post_preset_save(httpd_req_t *req) {
     httpd_resp_sendstr(req, "OK");
     return ESP_OK;
 }
-    .sw { background: #1e1e1e; padding: 15px; border-radius: 8px; border-top: 5px solid #00d1b2; box-shadow: 0 4px 8px rgba(0,0,0,0.4); transition: 0.3s; }
-    .sw h3 { margin: 0 0 10px 0; font-size: 0.9em; text-align: center; color: #00d1b2; border-bottom: 1px solid #333; padding-bottom: 5px; }
 
 // POST: Load a Preset Slot into Active Config
 esp_err_t post_preset_load(httpd_req_t *req) {
@@ -505,10 +481,7 @@ esp_err_t post_preset_load(httpd_req_t *req) {
     int ret = httpd_req_recv(req, buf, sizeof(buf));
     if (ret <= 0) return ESP_FAIL;
     buf[ret] = '\0';
-    .grid-section { margin-bottom: 10px; }
-    .label-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
-    label { font-size: 0.65em; color: #888; text-transform: uppercase; }
-
+    
     int i = atoi(buf);
     if(i >= 0 && i < MAX_PRESETS && presets[i].active) {
         // 1. OVERWRITE Live Config
@@ -579,21 +552,7 @@ void wifi_init_task(void *pv) {
     esp_wifi_set_config(WIFI_IF_STA, &sta_config);
     esp_wifi_start(); 
     ESP_LOGI(TAG, "Attempting connection to '%s'...", w_cfg.ssid);
-    /* INPUT GROUP: 3 Columns for MIDI Settings */
-    .input-group { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 4px; margin-bottom: 8px; transition: 0.3s; }
-    .disabled { opacity: 0.2; filter: grayscale(100%); pointer-events: none; }
-
-    select, input[type=number], input[type=text], input[type=password] { background: #2d2d2d; color: #fff; border: 1px solid #444; padding: 6px; border-radius: 4px; width: 100%; font-size: 0.85em; box-sizing: border-box; }
-    input:focus, select:focus { border-color: #00d1b2; outline: none; }
-    input[type=checkbox] { accent-color: #00d1b2; cursor: pointer; width: 20px; height: 20px; }
-
-    button { border: 0; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.2s; text-transform: uppercase; }
-    .btn-main { background: #00d1b2; color: #121212; width: 100%; font-size: 1em; height: 50px; position: sticky; bottom: 10px; box-shadow: 0 -5px 15px rgba(0,0,0,0.5); }
-    .btn-wifi { background: #ffa502; color: #121212; }
-    .btn-scan { background: #444; color: #eee; margin-bottom: 10px; }
-    .btn-cal { background: #444; color: #fff; font-size: 0.7em; padding: 6px; margin-top: 4px; width: 100%; }
-    .btn-cal:hover { background: #666; }
-
+    
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(15000));
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "WiFi Connected Successfully.");
@@ -691,15 +650,7 @@ void refresh_leds() {
 
     // --- 3. PREPARE DATA ---
     rmt_item32_t items[LED_COUNT * 24];
-    @media (max-width: 1000px) { #sws { grid-template-columns: repeat(2, 1fr); } }
-    @media (max-width: 600px) { #sws { grid-template-columns: 1fr; } .wifi-grid { grid-template-columns: 1fr; } }
-
-    details { background: #252525; padding: 5px; border-radius: 4px; margin-top: 5px; }
-    summary { cursor: pointer; font-size: 0.75em; color: #aaa; outline: none; padding: 5px; font-weight: bold; text-transform: uppercase; list-style: none; }
-    summary::-webkit-details-marker { display: none; }
-    summary:after { content: '+'; float: right; font-weight: bold; }
-    details[open] summary:after { content: '-'; }
-
+    
     for (int n = 0; n < LED_COUNT; n++) {
         uint8_t r = led_strip_pixels[n][0];
         uint8_t g = led_strip_pixels[n][1];
@@ -715,11 +666,7 @@ void refresh_leds() {
                 (rmt_item32_t){{{ 8, 1, 17, 0 }}};
         }
     }
-    .hidden-input { display: none !important; }
-</style></head>
-<body>
-    <h2>MIDI Pedal Master Config</h2>
-
+    
     // --- 4. SEND DATA (SAFE MODE) ---
     esp_rom_delay_us(60); 
     rmt_write_items(RMT_CHANNEL_0, items, LED_COUNT * 24, true);
@@ -746,59 +693,9 @@ void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *
 
         // Get config for this switch
         sw_cfg_t *cfg = (sw_cfg_t*)&dev_cfg.banks[current_bank].switches[i];
-    <div class='wifi-card'>
-        <h3>Connectivity</h3>
-        <div class='wifi-grid'>
-            <div id='ssid-container'><label>SSID</label><input type='text' id='ssid'></div>
-            <div><label>Password</label><input type='password' id='pass'></div>
-        </div>
-        <button class='btn-scan' id='scan-btn' onclick='scan()'>Scan WiFi</button>
-        <button class='btn-wifi' onclick='saveWifi()'>Save WiFi & Reboot</button>
-    </div>
-    
-    <div class='power-card'>
-        <h3>Power Saving</h3>
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-            <label>Auto-Sleep Enabled</label>
-            <div class="toggle-switch">
-                <input type="checkbox" id="ds_en" onchange="updGlob('ds_en', this.checked)">
-                <span class="slider"></span>
-            </div>
-        </div>
-        <div>
-            <label>Idle Timeout (Minutes)</label>
-            <input type="number" id="ds_min" min="1" max="120" style="width:100%;" onchange="updGlob('ds_min', this.value)">
-        </div>
-    </div>
-
-    <div class="control-box">
-        <label style="font-size: 1em; color: white; white-space: nowrap;">LED Brightness</label>
-        <input type="range" id="bri_slider" min="1" max="255" oninput="updateBri(this.value)">
-        <span id="bri_val" style="font-weight: bold; width: 40px; text-align: right;">127</span>
-    </div>
-    <div class="control-box">
-        <label style="font-size: 1em; color: white;">Battery Status</label>
-        <span id="bat_val" style="font-weight: bold; color: #00d1b2; font-size: 1.2em;">-- V</span>
-    </div>
-    <div class='preset-card' style="border-left: 5px solid #9b59b6;">
-        <h3>Preset Manager</h3>
-        <div style="display:flex; gap:10px; margin-bottom:10px;">
-            <select id="preset_list" onchange="onPresetSelect()" style="flex-grow:1;">
-                <option value="-1">Loading...</option>
-            </select>
-            <button class="btn-cal" style="width:auto; background:#2ecc71;" onclick="loadPreset()">LOAD</button>
-        </div>
-
+        
         uint8_t r = 0, g = 0, b = 0;
-        <div style="display:flex; gap:10px; align-items:center; background:#252525; padding:10px; border-radius:5px;">
-            <label style="white-space:nowrap;">Save As:</label>
-            <input type="text" id="preset_name" placeholder="Enter Preset Name" maxlength="20">
-            <button class="btn-cal" style="width:auto; background:#e67e22;" onclick="savePreset()">SAVE</button>
-        </div>
-    </div>
-    <div class='exp-card'>
-        <h3 style="margin-top:0;">Expression Config (Bank <span id="exp_bank_num"></span>)</h3>
-
+        
         // --- CASE A: DIRECT BANK SWITCH (Navigation) ---
         // We want these to show the TARGET color, but DIMMED so they don't look "Active".
         if (cfg->p_type >= 252) {
@@ -809,29 +706,7 @@ void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *
             g = (BANK_COLORS[target_b][1] * global_br) / 4000;
             b = (BANK_COLORS[target_b][2] * global_br) / 4000;
         }
-        <div class='wifi-grid'>
-            <div><label>Channel (1-16)</label><input type='number' id='exp_chan' min='1' max='16' onchange="updExp('ch', this.value)"></div>
-            <div>
-                <label>Pedal Function</label>
-                <select id="exp_func" onchange="updExp('cc', this.value)">
-                    <option value="11">Expression (CC 11)</option>
-                    <option value="7">Volume (CC 7)</option>
-                    <option value="1">Modulation (CC 1)</option>
-                    <option value="74">Filter Cutoff (CC 74)</option>
-                </select>
-            </div>
-        </div>
-
-        <div style="margin-bottom:15px;">
-             <label>Response Curve 
-</label>
-             <select id="exp_curve" onchange="updExp('crv', this.value)">
-                 <option value="0">Linear (Standard)</option>
-                 <option value="1">Exponential (Slow Start / Swell)</option>
-                 <option value="2">Logarithmic (Fast Start)</option>
-             </select>
-        </div>
-
+        
         // --- CASE B: CYCLE SWITCH (Next/Prev) ---
         else if (cfg->p_type == 250 || cfg->p_type == 251) {
             // Keep cycle switches fairly bright (50%) using Current Bank Color
@@ -867,74 +742,8 @@ void update_status_leds(float voltage, int current_bank, bool *sw_states, bool *
         }
 
         set_pixel(led_idx, r, g, b);
-        <div style="background: #252525; padding: 10px; border-radius: 5px;">
-            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                <label style="color:#aaa;">Calibration</label>
-                <label style="color:#e74c3c;">Live Raw: <span id="exp_live_val" style="font-weight:bold;">---</span></label>
-            </div>
-            <div class='wifi-grid'>
-                <div>
-                    <label>Heel (Min)</label>
-                    <input type='number' id='exp_min' onchange="updExp('min', this.value)">
-                    <button class="btn-cal" onclick="setExpMin()">Set to Current</button>
-                </div>
-                <div>
-                    <label>Toe (Max)</label>
-                    <input type='number' id='exp_max' onchange="updExp('max', this.value)">
-                    <button class="btn-cal" onclick="setExpMax()">Set to Current</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="bank-bar">
-        <button id="btn-b0" class="bank-btn" onclick="userSelBank(0)">Bank 1</button>
-        <button id="btn-b1" class="bank-btn" onclick="userSelBank(1)">Bank 2</button>
-        <button id="btn-b2" class="bank-btn" onclick="userSelBank(2)">Bank 3</button>
-        <button id="btn-b3" class="bank-btn" onclick="userSelBank(3)">Bank 4</button>
-    </div>
-
-    <div id='sws'></div>
-    <button class='btn-main' onclick='save()'>Save All Configuration</button>
-
-<script>
-    const types = { 144: 'Note On', 128: 'Note Off', 176: 'CC', 192: 'PC', 250: 'Bank Cycle Rev', 251: 'Bank Cycle Fwd' };
-    const bankColors = ['#FF0000', '#00FF00', '#0055FF', '#FF00FF'];
-    const textColors = ['#FFFFFF', '#000000', '#FFFFFF', '#FFFFFF'];
-
-    let fullData = null; 
-    let curBank = 0;
-    let liveExpVal = 0; 
-    let activePresetId = parseInt(localStorage.getItem('last_preset_id')) || 0;
-
-    function genMainTypes(val) {
-        const opts = [
-            {v:0, t:"None"}, {v:144, t:"Note On"}, {v:128, t:"Note Off"},
-            {v:176, t:"CC"}, {v:192, t:"PC"}, {v:251, t:"Bank Fwd"},
-            {v:250, t:"Bank Rev"}, {v:252, t:"Bank 1"}, {v:253, t:"Bank 2"},
-            {v:254, t:"Bank 3"}, {v:255, t:"Bank 4"}
-        ];
-        let h = "";
-        opts.forEach(o => { h += `<option value='${o.v}' ${val==o.v?"selected":""}>${o.t}</option>`; });
-        return h;
     }
-
-    function genSecTypes(val) {
-        const opts = [
-            {v:0, t:"None"}, {v:144, t:"Note On"}, {v:128, t:"Note Off"},
-            {v:176, t:"CC"}, {v:192, t:"PC"}
-        ];
-        let h = "";
-        opts.forEach(o => { h += `<option value='${o.v}' ${val==o.v?"selected":""}>${o.t}</option>`; });
-        return h;
-    }
-
-    function fromMask(mask) {
-        let grps = [];
-        for(let i=0; i<8; i++) { if((mask >> i) & 1) grps.push(i+1); }
-        return grps.join(', ');
-}
-
+    
     refresh_leds();
 }
 
@@ -944,43 +753,8 @@ void nvs_save_task(void *pv) {
         if (xQueueReceive(save_queue, &trigger, portMAX_DELAY)) {
             vTaskDelay(pdMS_TO_TICKS(500));
             nvs_handle_t h; if(nvs_open("storage", NVS_READWRITE, &h) == ESP_OK) { nvs_set_blob(h, "dev_cfg", (void*)&dev_cfg, sizeof(dev_cfg)); nvs_commit(h); nvs_close(h); ESP_LOGI(TAG, "Config Saved"); }
-    function toMask(str) {
-        let mask = 0;
-        if(!str) return 0;
-        str.toString().split(',').forEach(s => {
-            let v = parseInt(s.trim());
-            if(!isNaN(v) && v >= 1 && v <= 8) mask |= (1 << (v-1));
-        });
-        return mask;
+        }
     }
-
-    let presetList = [];
-
-    async function refreshPresets() {
-        try {
-            const r = await fetch('/api/presets');
-            presetList = await r.json();
-            const sel = document.getElementById('preset_list');
-            sel.innerHTML = "";
-            presetList.forEach(p => {
-                const opt = document.createElement('option');
-                opt.value = p.id;
-                opt.innerText = `${p.id + 1}: ${p.name}`;
-                sel.appendChild(opt);
-            });
-            sel.value = activePresetId;
-            onPresetSelect();
-        } catch(e) { console.log("Preset load err"); }
-    }
-
-    function onPresetSelect() {
-        const sel = document.getElementById('preset_list');
-        const id = parseInt(sel.value);
-        const preset = presetList.find(p => p.id === id);
-        if(preset) {
-            document.getElementById('preset_name').value = preset.active ? preset.name : `Preset ${id+1}`;
-}
-}
 }
 
 void restart_task(void *p) { vTaskDelay(pdMS_TO_TICKS(2000)); esp_restart(); }
@@ -1098,15 +872,7 @@ esp_err_t post_save_wifi(httpd_req_t *req) {
                  nvs_commit(h); nvs_close(h);
                  ESP_LOGI(TAG, "WiFi Credentials Saved.");
              }
-    async function loadPreset() {
-        const id = document.getElementById('preset_list').value;
-        activePresetId = parseInt(id);
-        localStorage.setItem('last_preset_id', activePresetId);
-        if(confirm("Load this preset? Current unsaved changes will be lost.")) {
-            await fetch('/api/preset/load', { method:'POST', body: id });
-            load(); 
-            alert("Preset Loaded!");
-}
+        }
         cJSON_Delete(root);
     }
     free(buf);
@@ -1156,7 +922,7 @@ esp_err_t post_save(httpd_req_t *req) {
         int ret = httpd_req_recv(req, buf + received, req->content_len - received);
         if (ret <= 0) { if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue; free(buf); return ESP_FAIL; }
         received += ret;
-}
+    }
     buf[received] = '\0'; 
     
     cJSON *root = cJSON_Parse(buf);
@@ -1245,39 +1011,7 @@ esp_err_t post_save(httpd_req_t *req) {
                         if(lm)  s->l_master  = lm->valueint;
                     }
                 }
-    async function savePreset() {
-        const id = parseInt(document.getElementById('preset_list').value);
-        const name = document.getElementById('preset_name').value;
-        if(!name) return alert("Please enter a name");
-        activePresetId = id;
-        localStorage.setItem('last_preset_id', activePresetId);
-        await save(); 
-        const payload = { id: id, name: name };
-        await fetch('/api/preset/save', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload)
-        });
-        alert("Preset Saved!");
-        refreshPresets(); 
-    }
-
-    async function load() {
-        try {
-            const r = await fetch('/api/settings');
-            fullData = await r.json();
-            document.getElementById('ssid').value = fullData.wifi.ssid;
-            document.getElementById('pass').value = fullData.wifi.pass;
-            
-            const bri = fullData.brightness || 127;
-            document.getElementById('bri_slider').value = bri;
-            document.getElementById('bri_val').innerText = bri;
-
-            if(fullData.exp) {
-                document.getElementById('exp_chan').value = (fullData.exp.chan || 0) + 1;
-                document.getElementById('exp_func').value = fullData.exp.cc || 11;
-                document.getElementById('exp_min').value = fullData.exp.min || 100;
-                document.getElementById('exp_max').value = fullData.exp.max || 4000;
-}
+            }
         }
         cJSON_Delete(root); 
         uint8_t trigger = 1; xQueueSend(save_queue, &trigger, 0);
@@ -1304,12 +1038,7 @@ void enter_deep_sleep() {
         gpio_set_direction(ROW_PINS[i], GPIO_MODE_OUTPUT);
         gpio_set_level(ROW_PINS[i], 0); 
         gpio_hold_en(ROW_PINS[i]); 
-            render();
-            updateBankClasses();
-            refreshPresets();
-            setInterval(pollStatus, 800); 
-        } catch (e) { console.error("Load failed", e); }
-}
+    }
 
     // 3. Configure COL pins (Inputs with RTC Pull-ups)
     uint64_t col_mask = 0;
@@ -1326,10 +1055,7 @@ void enter_deep_sleep() {
         
         // Add to wakeup mask
         col_mask |= (1ULL << pin);
-    function updateBri(val) {
-        document.getElementById('bri_val').innerText = val;
-        if(fullData) fullData.brightness = parseInt(val);
-}
+    }
 
     // 4. STABILIZATION DELAY
     // Give the RTC pull-ups time to charge the lines
@@ -1343,11 +1069,7 @@ void enter_deep_sleep() {
             ESP_LOGW(TAG, "ABORT SLEEP: Pin %d is LOW.", COL_PINS[i]);
             unsafe_to_sleep = true;
         }
-    function setExpMin() { 
-        const val = liveExpVal;
-        document.getElementById('exp_min').value = val; 
-        updExp('min', val); 
-}
+    }
 
     if (!unsafe_to_sleep) {
         ESP_LOGI(TAG, "Pins stable. Sleeping...");
@@ -1380,11 +1102,7 @@ void nvs_save_presets_to_flash() {
         }
         nvs_commit(h);
         nvs_close(h);
-    function setExpMax() { 
-        const val = liveExpVal;
-        document.getElementById('exp_max').value = val; 
-        updExp('max', val); 
-}
+    }
 }
 
 void nvs_load_presets_from_flash() {
@@ -1397,28 +1115,7 @@ void nvs_load_presets_from_flash() {
             if(nvs_get_blob(h, key, &presets[i], &sz) != ESP_OK) {
                 presets[i].active = false;
                 sprintf(presets[i].name, "Empty Slot %d", i+1);
-    async function pollStatus() {
-        if (document.activeElement.tagName === "INPUT" && document.activeElement.id !== "exp_chan") return; 
-        try {
-            const r = await fetch('/api/status');
-            if(r.ok) {
-                const d = await r.json();
-                if(d.bank !== curBank) {
-                    curBank = d.bank;
-                    updateBankClasses();
-                    render();
-                }
-                if(d.bat !== undefined) {
-                    document.getElementById('bat_val').innerText = d.bat.toFixed(2) + " V";
-                    if (d.bat > 3.8) document.getElementById('bat_val').style.color = "#2ecc71"; 
-                    else if (d.bat > 3.5) document.getElementById('bat_val').style.color = "#f1c40f"; 
-                    else document.getElementById('bat_val').style.color = "#e74c3c"; 
-                }
-                if(d.exp_raw !== undefined) {
-                    liveExpVal = d.exp_raw;
-                    document.getElementById('exp_live_val').innerText = liveExpVal;
-                }
-}
+            }
         }
         nvs_close(h);
     } else {
@@ -1427,8 +1124,7 @@ void nvs_load_presets_from_flash() {
             presets[i].active = false;
             sprintf(presets[i].name, "Empty Slot %d", i+1);
         }
-        } catch(e) {}
-}
+    }
 }
 void app_main(void) {
     // 1. CRITICAL: Release holds so we can use the pins immediately
@@ -1455,12 +1151,7 @@ void app_main(void) {
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) { 
         nvs_flash_erase(); 
         nvs_flash_init(); 
-    async function userSelBank(b) {
-        curBank = b;
-        updateBankClasses();
-        await fetch('/api/set_bank', { method: 'POST', body: b.toString() }); 
-        render();
-}
+    }
 
     nvs_handle_t h; 
     bool load_dev_success = false, load_wifi_success = false;
@@ -1498,30 +1189,15 @@ void app_main(void) {
             // Default Switches
             for(int i=0; i<SWITCH_COUNT; i++) {
                 dev_cfg.banks[b].switches[i] = (sw_cfg_t){MIDI_CC, 0, 80+i, 0, MIDI_CC, 0, 90+i, MIDI_CC, 0, 80+i, 0, 0, 0, 0, 0, 0, 0, 0, 0}; 
-    function updateBankClasses() {
-        for(let i=0; i<4; i++) {
-            const btn = document.getElementById('btn-b'+i);
-            if(i === curBank) {
-                btn.style.background = bankColors[i];
-                btn.style.color = textColors[i];
-                btn.style.borderBottom = '4px solid #fff';
-                btn.style.boxShadow = `0 0 15px ${bankColors[i]}`;
-                btn.style.transform = "scale(1.05)";
-            } else {
-                btn.style.background = '#333';
-                btn.style.color = '#aaa';
-                btn.style.borderBottom = `4px solid ${bankColors[i]}`;
-                btn.style.boxShadow = 'none';
-                btn.style.transform = "scale(1)";
-}
+            }
             // Default Expression (Per Bank)
             dev_cfg.banks[b].exp.chan = 0;
             dev_cfg.banks[b].exp.cc = 11;
             dev_cfg.banks[b].exp.min = 100;
             dev_cfg.banks[b].exp.max = 4000;
             dev_cfg.banks[b].exp.curve = 0;
-}
-}
+        }
+    }
     if (!load_wifi_success) { strcpy(w_cfg.ssid, "SSID"); strcpy(w_cfg.pass, "Password"); }
 
     save_queue = xQueueCreate(1, sizeof(uint8_t)); 
@@ -1532,22 +1208,12 @@ void app_main(void) {
         gpio_reset_pin(ROW_PINS[i]);
         gpio_set_direction(ROW_PINS[i], GPIO_MODE_OUTPUT);
         gpio_set_level(ROW_PINS[i], 1); // Start High
-    window.updGlob = function(key, val) {
-        if(!fullData) return;
-        if (key === 'ds_en') fullData.ds_en = val;
-        else if (key === 'ds_min') fullData.ds_min = parseInt(val);
-        else fullData[key] = parseInt(val);
-}
+    }
     for(int i=0; i<NUM_COLS; i++) {
         gpio_reset_pin(COL_PINS[i]);
         gpio_set_direction(COL_PINS[i], GPIO_MODE_INPUT);
         gpio_set_pull_mode(COL_PINS[i], GPIO_PULLUP_ONLY);
-    window.updExp = function(key, val) {
-        if(!fullData) return;
-        let v = parseInt(val);
-        if(key === 'ch') v = v - 1; 
-        fullData.banks[curBank].exp[key] = v;
-}
+    }
     
     // --- RESET IDENTITY (COMBO BTN 5 + BTN 8 ON BOOT) ---
     bool btn5_pressed = false;
@@ -1582,13 +1248,7 @@ void app_main(void) {
         }
         // De-init RMT so midi_task can load it properly later
         rmt_driver_uninstall(config.channel);
-    window.upd = function(swIdx, cat, valIdx, val) {
-        if(!fullData) return;
-        let v = parseInt(val);
-        if (valIdx === 1) v = v - 1; 
-        fullData.banks[curBank].switches[swIdx][cat][valIdx] = v;
-        if(cat === 'p' && valIdx === 0) render(); 
-}
+    }
 
     init_battery(); 
     init_expression_pedal();
@@ -1610,7 +1270,7 @@ void app_main(void) {
 
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL);
-
+    
     // --- FORCE AP IF NOT CONFIGURED ---
     if (strcmp(w_cfg.ssid, "SSID") == 0) {
         ESP_LOGI(TAG, "Default Credentials Detected. Forcing WiFi/AP Mode.");
@@ -1621,11 +1281,7 @@ void app_main(void) {
         xTaskCreatePinnedToCore(wifi_init_task, "wifi_init", 4096, NULL, 10, NULL, 1); 
     } else { 
         init_ble_midi(); 
-    window.updBool = function(swIdx, key, checked) {
-        if(!fullData) return;
-        fullData.banks[curBank].switches[swIdx][key] = checked;
-        render(); 
-}
+    }
 
     xTaskCreatePinnedToCore(midi_task, "midi", 4096, NULL, 5, NULL, 0);
 }
@@ -1640,7 +1296,7 @@ void app_main(void) {
 // Handles the "Chain Reaction" for turning switches OFF.
 // If Master2 turns off Master1, this function ensures Master1 also turns off its Slaves.
 void trigger_switch_off(uint8_t bank, uint8_t idx) {
-
+    
     // 1. Safety Check: If already OFF, do nothing (stops infinite loops)
     if (!sw_toggled_on[bank][idx]) return;
 
@@ -1695,14 +1351,8 @@ void trigger_switch_on(uint8_t bank, uint8_t idx, uint8_t active_excl, uint8_t a
                     trigger_switch_off(b, s);
                 }
             }
-    window.updVal = function(swIdx, key, val) {
-        if(!fullData) return;
-        if(['incl', 'pe', 'pm', 'lpe', 'lpm', 'le', 'lm'].includes(key)) {
-            fullData.banks[curBank].switches[swIdx][key] = toMask(val);
-        } else {
-            fullData.banks[curBank].switches[swIdx][key] = parseInt(val);
-}
-}
+        }
+    }
 
     // 2. Handle INCLUSIVE Cascades
     if (active_master > 0) {
@@ -1711,142 +1361,13 @@ void trigger_switch_on(uint8_t bank, uint8_t idx, uint8_t active_excl, uint8_t a
                 if (b == bank && s == idx) continue; 
                 
                 sw_cfg_t *other = (sw_cfg_t*)&dev_cfg.banks[b].switches[s];
-    function render() {
-        if(!fullData) return;
-        const bank = fullData.banks[curBank];
-        
-        if (!bank.exp) bank.exp = {ch:0, cc:11, min:0, max:4095, crv:0};
-        
-        document.getElementById('exp_bank_num').innerText = curBank + 1;
-        document.getElementById('exp_chan').value = bank.exp.ch + 1;
-        document.getElementById('exp_func').value = bank.exp.cc;
-        document.getElementById('exp_min').value = bank.exp.min;
-        document.getElementById('exp_max').value = bank.exp.max;
-        document.getElementById('exp_curve').value = bank.exp.crv || 0; 
-        document.getElementById('ds_en').checked = fullData.ds_en;
-        document.getElementById('ds_min').value = fullData.ds_min;
-
-        let html = '';
-        bank.switches.forEach((s, i) => {
-            const isBank = (s.p[0] >= 250);
-            const disClass = isBank ? "disabled" : ""; 
-            const disAttr = isBank ? "disabled" : "";
-            const inclText = (s.incl !== undefined) ? fromMask(s.incl) : ""; 
-            const togEnabled = (s.tog !== undefined) ? s.tog : false; 
-            const edgeVal = (s.edge !== undefined) ? s.edge : 0; 
-            const openLp = (!isBank && (s.lp[0] !== 0 || s.lp_en)) ? "open" : "";
-            const openRel = (!isBank && (s.l[0] !== 0)) ? "open" : "";
-
-            const mkInputs = (type, ch, val, ex, lead, k_type, k_ex, k_lead) => {
-                const hideMidi = (type === 0) ? "hidden-input" : "";
-                const hideExcl = (k_type === 'l') ? "visibility:hidden;" : "";
-
+                
                 if ((other->incl_mask & active_master) != 0) {
                     trigger_switch_on(b, s, other->p_excl, other->p_master);
                 }
-                // UPDATED: Grid spanning
-                // We use 'grid-column: 1 / -1' on the Select if type is 0 to make it full width
-                // The Group Box div is now FORCED to be on a new row and span all columns.
-                const selStyle = (type === 0) ? "grid-column: 1 / -1;" : "";
-
-                return `
-                <div class='input-group'>
-                    <select style="${selStyle}" onchange="upd(${i},'${k_type}',0,this.value)">
-                        ${(k_type=='p'?genMainTypes(type):genSecTypes(type))}
-                    </select>
-                    
-                    <input class="${hideMidi} ${disClass}" ${disAttr} type='number' value='${ch + 1}' onchange="upd(${i},'${k_type}',1,this.value)" min='1' max='16' title="Channel">
-                    <input class="${hideMidi} ${disClass}" ${disAttr} type='number' value='${val}' onchange="upd(${i},'${k_type}',2,this.value)" min='0' max='127' title="Value">
-                    
-                    <div style="grid-column: 1 / -1; display:flex; align-items:center; gap:5px; margin-top:4px; padding-top:4px; border-top:1px dashed #333;">
-                        <span style="font-size:0.7em; color:#666; font-weight:bold;">GROUPS:</span>
-                        <input class="${disClass}" ${disAttr} type="text" placeholder="Ex" title="Exclusive Mask (🛡️)" style="flex:1; text-align:center; border-color:#e74c3c; ${hideExcl}" value="${fromMask(ex)}" onchange="updVal(${i}, '${k_ex}', this.value)">
-                        <input class="${disClass}" ${disAttr} type="text" placeholder="Ld" title="Lead/Master Mask (⚡)" style="flex:1; text-align:center; border-color:#f1c40f;" value="${fromMask(lead)}" onchange="updVal(${i}, '${k_lead}', this.value)">
-                    </div>
-                </div>`;
-            };
-
-            html += `
-            <div class='sw'>
-                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:10px;">
-                    <h3 style="margin:0; border:none; font-size:1em;">SWITCH ${i+1}</h3>
-                    <div style="display:flex; align-items:center; gap:10px;">
-                        <div style="display:flex; align-items:center; gap:4px;" title="Groups this switch belongs to (Slave)">
-                            <label style="font-size:1.2em; margin:0;">🔗</label>
-                            <input class="${disClass}" ${disAttr} type="text" style="width:70px; border:1px solid #2ecc71; text-align:center;" value="${inclText}" onchange="updVal(${i}, 'incl', this.value)">
-                        </div>
-                        <div style="display:flex; align-items:center; background:#252525; padding:2px 6px; border-radius:4px;">
-                            <label style="font-size:0.7em; margin-right:4px; font-weight:bold;">TOGGLE</label>
-                            <input class="${disClass}" ${disAttr} type="checkbox" ${togEnabled ? "checked" : ""} onchange="updBool(${i}, 'tog', this.checked)">
-                        </div>
-                    </div>
-                </div>
-                <div class='grid-section'>
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
-                        <label style="color:#00d1b2; font-weight:bold;">Short Press</label>
-                        <select class="${disClass}" ${disAttr} style="width:auto; padding:0 5px; font-size:0.7em; height:20px;" onchange="updVal(${i}, 'edge', this.value)">
-                            <option value="0" ${edgeVal==0?"selected":""}>Trig: Press</option>
-                            <option value="1" ${edgeVal==1?"selected":""}>Trig: Release</option>
-                        </select>
-                    </div>
-                    ${mkInputs(s.p[0], s.p[1], s.p[2], s.pe, s.pm, 'p', 'pe', 'pm')}
-                </div>
-                <details ${openLp} class="${disClass}" ${disAttr}>
-                    <summary>Long Press Options</summary>
-                    <div style="padding-top:5px;">
-                        <div class="label-row">
-                            <label>Enable Long Press</label>
-                            <input type="checkbox" ${s.lp_en ? "checked" : ""} onchange="updBool(${i}, 'lp_en', this.checked)">
-                        </div>
-                        <div style="${s.lp_en ? '' : 'opacity:0.5; pointer-events:none;'}">
-                            ${mkInputs(s.lp[0], s.lp[1], s.lp[2], s.lpe, s.lpm, 'lp', 'lpe', 'lpm')}
-                        </div>
-                    </div>
-                </details>
-                <details ${openRel} class="${disClass}" ${disAttr}>
-                    <summary>Release / Off Options</summary>
-                    <div style="padding-top:5px;">
-                        ${mkInputs(s.l[0], s.l[1], s.l[2], s.le, s.lm, 'l', 'le', 'lm')}
-                    </div>
-                </details>
-            </div>`;
-        });
-        document.getElementById('sws').innerHTML = html;
+            }
+        }
     }
-
-    async function save() {
-        const btn = document.querySelector('.btn-main');
-        const oldText = btn.innerText;
-        btn.innerText = "Saving...";
-        btn.disabled = true;
-
-        if(!fullData.exp) fullData.exp = {};
-        fullData.exp.chan = parseInt(document.getElementById('exp_chan').value) - 1;
-        fullData.exp.cc = parseInt(document.getElementById('exp_func').value);
-        fullData.exp.min = parseInt(document.getElementById('exp_min').value);
-        fullData.exp.max = parseInt(document.getElementById('exp_max').value);
-
-        try {
-            const r = await fetch('/api/save', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(fullData)
-            });
-            if(r.ok) {
-                btn.style.background = "#2ecc71";
-                btn.innerText = "Saved Successfully!";
-                setTimeout(() => {
-                    btn.style.background = "#00d1b2";
-                    btn.innerText = oldText;
-                    btn.disabled = false;
-                }, 2000);
-}
-        } catch (e) { 
-            alert('Save error'); 
-            btn.disabled = false;
-            btn.innerText = oldText;
-}
-}
 }
 
 void midi_task(void *pv) {
@@ -1871,34 +1392,8 @@ void midi_task(void *pv) {
             press_start[i] = 0; 
             lp_triggered[i] = false; 
             last_debounce_time[i] = 0; 
-    async function scan() {
-        const btn = document.getElementById('scan-btn');
-        btn.innerText = 'Scanning...';
-        try {
-            const r = await fetch('/api/scan');
-            const ssids = await r.json();
-            const sel = document.createElement('select'); sel.id = 'ssid';
-            [...new Set(ssids)].filter(s=>s).forEach(s => {
-                const opt = document.createElement('option'); opt.value=s; opt.innerText=s; sel.appendChild(opt);
-            });
-            document.getElementById('ssid-container').innerHTML = '<label>SSID</label>';
-            document.getElementById('ssid-container').appendChild(sel);
-        } catch (e) { alert("Scan failed"); }
-        btn.innerText = 'Scan WiFi';
+        }
     }
-
-    async function saveWifi() {
-        const ssid = document.getElementById('ssid').value;
-        const pass = document.getElementById('pass').value;
-        if(!ssid) return alert("SSID required");
-        if(confirm("Save WiFi and Reboot?")) {
-            await fetch('/api/save_wifi', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ssid, pass})
-            });
-            alert("Settings saved. Device is rebooting...");
-}
-}
     
     // Timers & Triggers
     uint32_t combo_timer = 0;
@@ -2075,9 +1570,6 @@ void midi_task(void *pv) {
             last_slow_task_time = now_ms;
             process_expression_pedal(now_ms);
             read_battery();
-    load();
-</script></body></html>
-)=====";
 
             if (now_ms < flash_end_time) {
                 uint8_t fw = dev_cfg.global_brightness / 3; 
@@ -2119,4 +1611,3 @@ void midi_task(void *pv) {
         vTaskDelay(delay == 0 ? 1 : delay);
     }
 }
-#endif
